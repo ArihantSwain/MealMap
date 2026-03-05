@@ -1,6 +1,9 @@
 import json
 import os
+from dotenv import load_dotenv
 from flask import Flask
+
+load_dotenv()
 from flask_cors import CORS
 from models import db, Episode, Review
 from routes import register_routes
