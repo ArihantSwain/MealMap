@@ -1,48 +1,33 @@
-"""
-Routes: home page and episode search.
+import os
+import pandas as pd
+from flask import jsonify, request, render_template
 
-To enable AI chat, set USE_LLM = True below. See llm_routes.py for LLM specific routes.
-"""
-import json
-from flask import render_template, request
-from models import db, Episode, Review
-
-# ── AI toggle ──
-USE_LLM = False
-# USE_LLM = True
-# ───────────────
-
-
-def json_search(query):
-    if not query or not query.strip():
-        query = "Kardashian"
-    results = db.session.query(Episode, Review).join(
-        Review, Episode.id == Review.id
-    ).filter(
-        Episode.title.ilike(f'%{query}%')
-    ).all()
-    matches = []
-    for episode, review in results:
-        matches.append({
-            'title': episode.title,
-            'descr': episode.descr,
-            'imdb_rating': review.imdb_rating
-        })
-    return json.dumps(matches)
-
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, "MealMap", "recipes_with_nutrition.csv")
 
 def register_routes(app):
     @app.route("/")
     def home():
-        if USE_LLM:
-            return render_template('chat.html')
-        return render_template('base.html')
+        return render_template("base.html")
 
-    @app.route("/episodes")
-    def episodes_search():
-        text = request.args.get("title", "")
-        return json_search(text)
+    @app.route("/recipes", methods=["GET"])
+    def get_recipes():
+        df = pd.read_csv(CSV_PATH)
+        df = df.fillna("")
 
-    if USE_LLM:
-        from llm_routes import register_chat_route
-        register_chat_route(app, json_search)
+        query = request.args.get("query", "").strip().lower()
+        diet = request.args.get("diet", "").strip().lower()
+
+        title_col = "title" if "title" in df.columns else ("name" if "name" in df.columns else None)
+
+        if query and title_col:
+            df = df[df[title_col].astype(str).str.lower().str.contains(query, na=False)]
+
+        if diet:
+            if "diet" in df.columns:
+                df = df[df["diet"].astype(str).str.lower().str.contains(diet, na=False)]
+            elif "tags" in df.columns:
+                df = df[df["tags"].astype(str).str.lower().str.contains(diet, na=False)]
+
+        results = df.head(30).to_dict(orient="records")
+        return jsonify(results)
