@@ -33,6 +33,14 @@
     </main>
   </div>
 
+  <div id="recipeModal" class="modal hidden">
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+    <div class="modal-content">
+      <button id="closeModalButton" class="close-modal" aria-label="Close modal">&times;</button>
+      <div id="modalBody"></div>
+    </div>
+  </div>
+
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>
 </html>
