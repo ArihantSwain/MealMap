@@ -74,6 +74,10 @@ body.modal-open {
   flex-wrap: wrap;
 }
 
+.hidden {
+  display: none;
+}
+
 .filter-btn {
   padding: 10px 14px;
   border-radius: 999px;

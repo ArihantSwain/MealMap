@@ -1,10 +1,12 @@
 let currentDiet = "";
 let currentRecipes = [];
+let selectedFood = "";
 
 const searchInput = document.getElementById("searchInput");
 const searchButton = document.getElementById("searchButton");
 const recipesGrid = document.getElementById("recipesGrid");
 const statusMessage = document.getElementById("statusMessage");
+const nutrientFilters = document.getElementById("nutrientFilters");
 const filterButtons = document.querySelectorAll(".filter-btn");
 
 const recipeModal = document.getElementById("recipeModal");
@@ -39,6 +41,27 @@ function parseMaybeList(value) {
       .map((item) => item.trim())
       .filter(Boolean);
   }
+}
+
+function diet_prefs(dietValue) {
+  return dietValue;
+}
+
+function clearActiveFilters() {
+  filterButtons.forEach((btn) => btn.classList.remove("active"));
+  currentDiet = "";
+}
+
+function current_prefs() {
+  return diet_prefs(currentDiet || "none");
+}
+
+function showFilters() {
+  nutrientFilters.classList.remove("hidden");
+}
+
+function hideFilters() {
+  nutrientFilters.classList.add("hidden");
 }
 
 function recipeCard(recipe, index) {
@@ -91,6 +114,18 @@ function recipeCard(recipe, index) {
   `;
 }
 
+function select_match(title, index) {
+  return `
+    <article class="card">
+      <div class="card-body">
+        <h2>${escapeHtml(title)}</h2>
+        <p>Did you mean this food?</p>
+        <button class="match-select-btn" data-index="${index}">Use This</button>
+      </div>
+    </article>
+  `;
+}
+
 function renderRecipes(recipes) {
   currentRecipes = recipes;
 
@@ -103,6 +138,30 @@ function renderRecipes(recipes) {
   recipesGrid.innerHTML = recipes.map((recipe, index) => recipeCard(recipe, index)).join("");
   setStatus("");
   attachCardListeners();
+}
+
+function display_cards(matches) {
+  currentRecipes = [];
+
+  if (!matches.length) {
+    recipesGrid.innerHTML = "";
+    hideFilters();
+    setStatus("No close matches found. Try another search.");
+    return;
+  }
+
+  recipesGrid.innerHTML = matches.map((title, index) => select_match(title, index)).join("");
+  setStatus("Select the food you meant, then choose a nutrient filter.");
+
+  document.querySelectorAll(".match-select-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      const index = Number(button.dataset.index);
+      selectedFood = matches[index];
+      showFilters();
+      setStatus(`Selected "${selectedFood}". Loading similar foods (none preference).`);
+      fetch_similar_recipes();
+    });
+  });
 }
 
 function openModal(recipe) {
@@ -201,45 +260,87 @@ function attachCardListeners() {
   });
 }
 
-async function fetchRecipes() {
+async function fetch_query_cards() {
   const query = searchInput.value.trim();
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({ query });
 
-  if (query) params.append("query", query);
-  if (currentDiet) params.append("diet", currentDiet);
+  if (!query) {
+    setStatus("Enter a food to search for.", true);
+    return;
+  }
 
-  setStatus("Loading recipes...");
+  selectedFood = "";
+  clearActiveFilters();
+  hideFilters();
+
+  setStatus("Finding close matches...");
   recipesGrid.innerHTML = "";
 
   try {
-    const response = await fetch(`/recipes?${params.toString()}`);
+    const response = await fetch(`/mealmap/matches?${params.toString()}`);
     if (!response.ok) {
       throw new Error(`Request failed: ${response.status}`);
     }
 
     const data = await response.json();
-    const recipes = Array.isArray(data) ? data : (Array.isArray(data.recipes) ? data.recipes : []);
-    renderRecipes(recipes);
+    const matches = Array.isArray(data.matches) ? data.matches : [];
+    if (matches.length === 1) {
+      selectedFood = matches[0];
+      showFilters();
+      setStatus(`Matched "${selectedFood}". Loading similar foods (none preference).`);
+      fetch_similar_recipes();
+      return;
+    }
+    display_cards(matches);
   } catch (err) {
     console.error(err);
-    setStatus("Could not load recipes from the backend.", true);
+    setStatus("Could not load any close matches.", true);
   }
 }
 
-searchButton.addEventListener("click", fetchRecipes);
+async function fetch_similar_recipes() {
+  if (!selectedFood) {
+    setStatus("Choose one of the suggested foods first.", true);
+    return;
+  }
+
+  const params = new URLSearchParams({
+    selected: selectedFood,
+    profile: current_prefs(),
+  });
+
+  setStatus("Finding similar foods...");
+  recipesGrid.innerHTML = "";
+
+  try {
+    const response = await fetch(`/mealmap/recommend?${params.toString()}`);
+    if (!response.ok) {
+      throw new Error(`Request failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    const recipes = Array.isArray(data.recipes) ? data.recipes : [];
+    renderRecipes(recipes);
+  } catch (err) {
+    console.error(err);
+    setStatus("Could not load similar foods from the backend.", true);
+  }
+}
+
+searchButton.addEventListener("click", fetch_query_cards);
 
 searchInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
-    fetchRecipes();
+    fetch_query_cards();
   }
 });
 
 filterButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    filterButtons.forEach((btn) => btn.classList.remove("active"));
+    clearActiveFilters();
     button.classList.add("active");
     currentDiet = button.dataset.diet || "";
-    fetchRecipes();
+    fetch_similar_recipes();
   });
 });
 
@@ -252,4 +353,5 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-fetchRecipes();
+setStatus("Search for a food to begin.");
+hideFilters();

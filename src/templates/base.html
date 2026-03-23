@@ -10,20 +10,22 @@
   <div class="page">
     <header class="hero">
       <h1>MealMap</h1>
-      <p>Search recipes and filter by dietary preference.</p>
+      <p>Search a food, choose the closest match, then filter by nutrient goal.</p>
 
       <div class="search-row">
-        <input id="searchInput" type="text" placeholder="Search for a recipe..." />
+        <input id="searchInput" type="text" placeholder="Search for a food..." />
         <button id="searchButton">Search</button>
       </div>
 
-      <div class="filters">
-        <button class="filter-btn active" data-diet="">All</button>
-        <button class="filter-btn" data-diet="vegetarian">Vegetarian</button>
-        <button class="filter-btn" data-diet="vegan">Vegan</button>
-        <button class="filter-btn" data-diet="gluten-free">Gluten Free</button>
-        <button class="filter-btn" data-diet="high-protein">High Protein</button>
+      <div id="nutrientFilters" class="filters hidden">
+        <button class="filter-btn" data-diet="high_protein">High Protein</button>
+        <button class="filter-btn" data-diet="low_carb">Low Carb</button>
         <button class="filter-btn" data-diet="keto">Keto</button>
+        <button class="filter-btn" data-diet="low_calorie">Low Calorie</button>
+        <button class="filter-btn" data-diet="low_fat">Low Fat</button>
+        <button class="filter-btn" data-diet="low_sodium">Low Sodium</button>
+        <button class="filter-btn" data-diet="balanced">Balanced</button>
+        <button class="filter-btn" data-diet="bodybuilding">Bodybuilding</button>
       </div>
     </header>
 

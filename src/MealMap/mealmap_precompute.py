@@ -171,11 +171,7 @@ def find_matching_dishes(query: str, name_ingredient_map: dict) -> list[str]:
     return matches
 
 
-def get_similar_by_ingredients(
-    dish_name: str,
-    name_ingredient_map: dict,
-    top_k: int = 50,
-) -> list[tuple[int, str]]:
+def get_similar_by_ingredients(dish_name: str, name_ingredient_map: dict, top_k: int = 50,) -> list[tuple[int, str]]:
     """Find the top-k recipes with the most shared ingredients."""
     sample_ingredients = name_ingredient_map[dish_name]
     return heapq.nlargest(
