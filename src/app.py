@@ -1,17 +1,12 @@
-import os
-from dotenv import load_dotenv
-from flask import Flask
-from flask_cors import CORS
+from flask import Flask, render_template
 from routes import register_routes
 
-load_dotenv()
-
-app = Flask(__name__)
-CORS(app)
-
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-key")
-
+app = Flask(__name__, template_folder="templates", static_folder="static")
 register_routes(app)
 
+@app.route("/")
+def home():
+    return render_template("base.html")
+
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5001)
+    app.run(debug=True)

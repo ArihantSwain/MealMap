@@ -1,5 +1,6 @@
 let currentDiet = "";
 let currentRecipes = [];
+let currentMatches = [];
 let selectedFood = "";
 
 const searchInput = document.getElementById("searchInput");
@@ -43,70 +44,51 @@ function parseMaybeList(value) {
   }
 }
 
-function diet_prefs(dietValue) {
-  return dietValue;
-}
-
-function clearActiveFilters() {
-  filterButtons.forEach((btn) => btn.classList.remove("active"));
-  currentDiet = "";
-}
-
 function current_prefs() {
-  return diet_prefs(currentDiet || "none");
+  return currentDiet || "none";
 }
 
 function showFilters() {
   nutrientFilters.classList.remove("hidden");
 }
 
-function hideFilters() {
-  nutrientFilters.classList.add("hidden");
+function displayValue(value, suffix = "") {
+  if (value === null || value === undefined || value === "") return "N/A";
+  return `${escapeHtml(value)}${suffix}`;
 }
 
 function recipeCard(recipe, index) {
   const title = recipe.title || recipe.name || "Untitled Recipe";
-
-  const calories =
-    recipe.calories_per_serving ??
-    recipe.calories ??
-    "N/A";
-
-  const protein =
-    recipe.protein_per_serving ??
-    recipe.protein_g ??
-    recipe.protein ??
-    "N/A";
-
-  const carbs =
-    recipe.carbs_per_serving ??
-    recipe.carbs_g ??
-    recipe.carbs ??
-    recipe.carbohydrates ??
-    "N/A";
-
-  const fat =
-    recipe.fat_per_serving ??
-    recipe.fat_g ??
-    recipe.fat ??
-    "N/A";
-
-  const diet = recipe.diet || recipe.tags || "";
+  const calories = recipe.calories ?? "N/A";
+  const protein = recipe.protein_g ?? "N/A";
+  const carbs = recipe.carbs_g ?? "N/A";
+  const fat = recipe.fat_g ?? "N/A";
+  const fiber = recipe.fiber_g ?? "N/A";
+  const sodium = recipe.sodium_mg ?? "N/A";
+  const diet = recipe.diet || "";
   const servings = recipe.servings ?? "N/A";
+  const similarity = recipe.similarity_score ?? "N/A";
+  const nutritionStatus = recipe.nutrition_status || "";
+  const confidence = recipe.nutrition_confidence ?? "N/A";
 
   return `
     <article class="card clickable-card" data-index="${index}" role="button" tabindex="0">
       <div class="card-body">
         <h2>${escapeHtml(title)}</h2>
         <div class="meta-row">
+          <span class="badge">Similarity: ${escapeHtml(similarity)}%</span>
           <span class="badge">Servings: ${escapeHtml(servings)}</span>
+          <span class="badge">Confidence: ${escapeHtml(confidence)}</span>
           ${diet ? `<span class="badge">${escapeHtml(diet)}</span>` : ""}
+          ${nutritionStatus ? `<span class="badge">${escapeHtml(nutritionStatus)}</span>` : ""}
         </div>
         <div class="nutrition-grid">
-          <div class="nutrition-box"><div class="label">Calories</div><div class="value">${escapeHtml(calories)}</div></div>
-          <div class="nutrition-box"><div class="label">Protein</div><div class="value">${escapeHtml(protein)}g</div></div>
-          <div class="nutrition-box"><div class="label">Carbs</div><div class="value">${escapeHtml(carbs)}g</div></div>
-          <div class="nutrition-box"><div class="label">Fat</div><div class="value">${escapeHtml(fat)}g</div></div>
+          <div class="nutrition-box"><div class="label">Calories</div><div class="value">${displayValue(calories)}</div></div>
+          <div class="nutrition-box"><div class="label">Protein</div><div class="value">${displayValue(protein, "g")}</div></div>
+          <div class="nutrition-box"><div class="label">Carbs</div><div class="value">${displayValue(carbs, "g")}</div></div>
+          <div class="nutrition-box"><div class="label">Fat</div><div class="value">${displayValue(fat, "g")}</div></div>
+          <div class="nutrition-box"><div class="label">Fiber</div><div class="value">${displayValue(fiber, "g")}</div></div>
+          <div class="nutrition-box"><div class="label">Sodium</div><div class="value">${displayValue(sodium, " mg")}</div></div>
         </div>
         <p class="open-hint">Click to view full recipe</p>
       </div>
@@ -114,12 +96,37 @@ function recipeCard(recipe, index) {
   `;
 }
 
-function select_match(title, index) {
+function selectMatchCard(match, index) {
+  const title = match.title || "Untitled";
+  const calories = match.calories ?? "N/A";
+  const protein = match.protein_g ?? "N/A";
+  const carbs = match.carbs_g ?? "N/A";
+  const fat = match.fat_g ?? "N/A";
+  const fiber = match.fiber_g ?? "N/A";
+  const sodium = match.sodium_mg ?? "N/A";
+  const servings = match.servings ?? "N/A";
+  const similarity = match.similarity_score ?? "N/A";
+  const nutritionStatus = match.nutrition_status || "";
+  const activeDiet = currentDiet || "";
+
   return `
     <article class="card">
       <div class="card-body">
         <h2>${escapeHtml(title)}</h2>
-        <p>Did you mean this food?</p>
+        <div class="meta-row">
+          <span class="badge">Similarity: ${escapeHtml(similarity)}%</span>
+          <span class="badge">Servings: ${escapeHtml(servings)}</span>
+          ${activeDiet ? `<span class="badge">${escapeHtml(activeDiet)}</span>` : ""}
+          ${nutritionStatus ? `<span class="badge">${escapeHtml(nutritionStatus)}</span>` : ""}
+        </div>
+        <div class="nutrition-grid">
+          <div class="nutrition-box"><div class="label">Calories</div><div class="value">${displayValue(calories)}</div></div>
+          <div class="nutrition-box"><div class="label">Protein</div><div class="value">${displayValue(protein, "g")}</div></div>
+          <div class="nutrition-box"><div class="label">Carbs</div><div class="value">${displayValue(carbs, "g")}</div></div>
+          <div class="nutrition-box"><div class="label">Fat</div><div class="value">${displayValue(fat, "g")}</div></div>
+          <div class="nutrition-box"><div class="label">Fiber</div><div class="value">${displayValue(fiber, "g")}</div></div>
+          <div class="nutrition-box"><div class="label">Sodium</div><div class="value">${displayValue(sodium, " mg")}</div></div>
+        </div>
         <button class="match-select-btn" data-index="${index}">Use This</button>
       </div>
     </article>
@@ -136,29 +143,30 @@ function renderRecipes(recipes) {
   }
 
   recipesGrid.innerHTML = recipes.map((recipe, index) => recipeCard(recipe, index)).join("");
-  setStatus("");
+  setStatus(`Showing ${recipes.length} recipes for ${selectedFood}${currentDiet ? ` • ${currentDiet}` : ""}.`);
   attachCardListeners();
 }
 
-function display_cards(matches) {
+function displayMatches(matches) {
+  currentMatches = matches;
   currentRecipes = [];
 
   if (!matches.length) {
     recipesGrid.innerHTML = "";
-    hideFilters();
     setStatus("No close matches found. Try another search.");
     return;
   }
 
-  recipesGrid.innerHTML = matches.map((title, index) => select_match(title, index)).join("");
-  setStatus("Select the food you meant, then choose a nutrient filter.");
+  showFilters();
+  recipesGrid.innerHTML = matches.map((match, index) => selectMatchCard(match, index)).join("");
+  setStatus(currentDiet
+    ? `Select the food you meant. Current filter: ${currentDiet}.`
+    : "Select the food you meant, or choose a nutrient filter first.");
 
   document.querySelectorAll(".match-select-btn").forEach((button) => {
     button.addEventListener("click", () => {
       const index = Number(button.dataset.index);
-      selectedFood = matches[index];
-      showFilters();
-      setStatus(`Selected "${selectedFood}". Loading similar foods (none preference).`);
+      selectedFood = matches[index].title;
       fetch_similar_recipes();
     });
   });
@@ -168,46 +176,41 @@ function openModal(recipe) {
   const title = recipe.title || recipe.name || "Untitled Recipe";
   const ingredients = parseMaybeList(recipe.ingredients);
   const directions = parseMaybeList(recipe.directions);
-
-  const calories =
-    recipe.calories_per_serving ??
-    recipe.calories ??
-    "N/A";
-
-  const protein =
-    recipe.protein_per_serving ??
-    recipe.protein_g ??
-    recipe.protein ??
-    "N/A";
-
-  const carbs =
-    recipe.carbs_per_serving ??
-    recipe.carbs_g ??
-    recipe.carbs ??
-    recipe.carbohydrates ??
-    "N/A";
-
-  const fat =
-    recipe.fat_per_serving ??
-    recipe.fat_g ??
-    recipe.fat ??
-    "N/A";
-
+  const calories = recipe.calories ?? "N/A";
+  const protein = recipe.protein_g ?? "N/A";
+  const carbs = recipe.carbs_g ?? "N/A";
+  const fat = recipe.fat_g ?? "N/A";
   const fiber = recipe.fiber_g ?? "N/A";
   const sodium = recipe.sodium_mg ?? "N/A";
+  const similarity = recipe.similarity_score ?? "N/A";
+  const nutritionStatus = recipe.nutrition_status || "";
+  const confidence = recipe.nutrition_confidence ?? "N/A";
+  const matchedKeywords = recipe.matched_ingredient_keywords || "";
   const link = recipe.link ? (String(recipe.link).startsWith("http") ? recipe.link : `https://${recipe.link}`) : "";
 
   modalBody.innerHTML = `
     <h2 class="modal-title">${escapeHtml(title)}</h2>
 
-    <div class="modal-nutrition-grid">
-      <div class="nutrition-box"><div class="label">Calories</div><div class="value">${escapeHtml(calories)}</div></div>
-      <div class="nutrition-box"><div class="label">Protein</div><div class="value">${escapeHtml(protein)}g</div></div>
-      <div class="nutrition-box"><div class="label">Carbs</div><div class="value">${escapeHtml(carbs)}g</div></div>
-      <div class="nutrition-box"><div class="label">Fat</div><div class="value">${escapeHtml(fat)}g</div></div>
-      <div class="nutrition-box"><div class="label">Fiber</div><div class="value">${escapeHtml(fiber)}g</div></div>
-      <div class="nutrition-box"><div class="label">Sodium</div><div class="value">${escapeHtml(sodium)} mg</div></div>
+    <div class="meta-row">
+      <span class="badge">Similarity: ${escapeHtml(similarity)}%</span>
+      <span class="badge">Confidence: ${escapeHtml(confidence)}</span>
+      ${nutritionStatus ? `<span class="badge">${escapeHtml(nutritionStatus)}</span>` : ""}
     </div>
+
+    <div class="modal-nutrition-grid">
+      <div class="nutrition-box"><div class="label">Calories</div><div class="value">${displayValue(calories)}</div></div>
+      <div class="nutrition-box"><div class="label">Protein</div><div class="value">${displayValue(protein, "g")}</div></div>
+      <div class="nutrition-box"><div class="label">Carbs</div><div class="value">${displayValue(carbs, "g")}</div></div>
+      <div class="nutrition-box"><div class="label">Fat</div><div class="value">${displayValue(fat, "g")}</div></div>
+      <div class="nutrition-box"><div class="label">Fiber</div><div class="value">${displayValue(fiber, "g")}</div></div>
+      <div class="nutrition-box"><div class="label">Sodium</div><div class="value">${displayValue(sodium, " mg")}</div></div>
+    </div>
+
+    ${
+      matchedKeywords
+        ? `<div class="modal-section"><h3>Matched Ingredient Clues</h3><p>${escapeHtml(matchedKeywords)}</p></div>`
+        : ""
+    }
 
     <div class="modal-section">
       <h3>Ingredients</h3>
@@ -262,7 +265,10 @@ function attachCardListeners() {
 
 async function fetch_query_cards() {
   const query = searchInput.value.trim();
-  const params = new URLSearchParams({ query });
+  const params = new URLSearchParams({
+    query,
+    profile: current_prefs()
+  });
 
   if (!query) {
     setStatus("Enter a food to search for.", true);
@@ -270,10 +276,8 @@ async function fetch_query_cards() {
   }
 
   selectedFood = "";
-  clearActiveFilters();
-  hideFilters();
-
-  setStatus("Finding close matches...");
+  showFilters();
+  setStatus(`Finding close matches${currentDiet ? ` • ${currentDiet}` : ""}...`);
   recipesGrid.innerHTML = "";
 
   try {
@@ -284,14 +288,14 @@ async function fetch_query_cards() {
 
     const data = await response.json();
     const matches = Array.isArray(data.matches) ? data.matches : [];
+
     if (matches.length === 1) {
-      selectedFood = matches[0];
-      showFilters();
-      setStatus(`Matched "${selectedFood}". Loading similar foods (none preference).`);
+      selectedFood = matches[0].title;
       fetch_similar_recipes();
       return;
     }
-    display_cards(matches);
+
+    displayMatches(matches);
   } catch (err) {
     console.error(err);
     setStatus("Could not load any close matches.", true);
@@ -300,7 +304,7 @@ async function fetch_query_cards() {
 
 async function fetch_similar_recipes() {
   if (!selectedFood) {
-    setStatus("Choose one of the suggested foods first.", true);
+    setStatus("Select a close match first.");
     return;
   }
 
@@ -309,7 +313,7 @@ async function fetch_similar_recipes() {
     profile: current_prefs(),
   });
 
-  setStatus("Finding similar foods...");
+  setStatus(`Finding similar foods${currentDiet ? ` • ${currentDiet}` : ""}...`);
   recipesGrid.innerHTML = "";
 
   try {
@@ -337,10 +341,17 @@ searchInput.addEventListener("keydown", (event) => {
 
 filterButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    clearActiveFilters();
+    filterButtons.forEach((btn) => btn.classList.remove("active"));
     button.classList.add("active");
     currentDiet = button.dataset.diet || "";
-    fetch_similar_recipes();
+
+    if (selectedFood) {
+      fetch_similar_recipes();
+    } else if (searchInput.value.trim()) {
+      fetch_query_cards();
+    } else {
+      setStatus(`Filter set to ${currentDiet}. Search for a food next.`);
+    }
   });
 });
 
@@ -354,4 +365,4 @@ document.addEventListener("keydown", (event) => {
 });
 
 setStatus("Search for a food to begin.");
-hideFilters();
+showFilters();
