@@ -13,11 +13,7 @@ from sklearn.preprocessing import normalize
 bp = Blueprint("bp", __name__)
 
 BASE_DIR = Path(__file__).resolve().parent
-
-CANDIDATE_PATHS = [
-    BASE_DIR / "data" / "recipes_enriched.csv",         # deployed flattened layout
-    BASE_DIR.parent / "data" / "recipes_enriched.csv",  # local src/routes.py layout
-]
+DATA_PATH = BASE_DIR / "data" / "recipes_enriched.csv"
 
 SEARCH_LIMIT = 12
 RECOMMEND_LIMIT = 24
@@ -30,18 +26,6 @@ SVD_COMPONENTS = 0
 SVD_MODEL = None
 SVD_MATRIX = None
 SVD_VARIANCE = 0.0
-
-
-def resolve_data_path():
-    for path in CANDIDATE_PATHS:
-        if path.exists():
-            return path
-
-    checked = "\n".join(str(p) for p in CANDIDATE_PATHS)
-    raise FileNotFoundError(
-        f"Could not find dataset. Checked:\n{checked}"
-    )
-
 
 def normalize_text(value):
     text = str(value or "").lower().strip()
@@ -211,7 +195,7 @@ def add_final_columns(df):
 
 
 def load_data():
-    data_path = resolve_data_path()
+    data_path = DATA_PATH
     df = pd.read_csv(data_path).fillna("")
 
     expected = ["title", "ingredients", "directions", "link", "source", "site", "NER"]

@@ -1,7 +1,7 @@
 import pandas as pd
 
 INPUT = "data/processed/recipes_final.csv"
-OUTPUT = "data/recipes_enriched.csv"
+OUTPUT = "src/data/recipes_enriched.csv"
 
 df = pd.read_csv(INPUT)
 
