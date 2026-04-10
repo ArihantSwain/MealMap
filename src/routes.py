@@ -1,8 +1,8 @@
 from pathlib import Path
 import ast
 import re
+
 import numpy as np
-import os 
 import pandas as pd
 from flask import Blueprint, jsonify, request
 from sklearn.decomposition import TruncatedSVD
@@ -13,15 +13,34 @@ from sklearn.preprocessing import normalize
 bp = Blueprint("bp", __name__)
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = Path(os.getenv("DATA_PATH", BASE_DIR / "data" / "recipes_enriched.csv"))
-if not DATA_PATH.exists():
-    alt = BASE_DIR.parent / "data" / "recipes_enriched.csv"
-    if alt.exists():
-        DATA_PATH = alt
+
+CANDIDATE_PATHS = [
+    BASE_DIR / "data" / "recipes_enriched.csv",         # deployed flattened layout
+    BASE_DIR.parent / "data" / "recipes_enriched.csv",  # local src/routes.py layout
+]
 
 SEARCH_LIMIT = 12
 RECOMMEND_LIMIT = 24
 DEFAULT_MODEL = "svd"
+
+DF = None
+TFIDF_VECTORIZER = None
+TFIDF_MATRIX = None
+SVD_COMPONENTS = 0
+SVD_MODEL = None
+SVD_MATRIX = None
+SVD_VARIANCE = 0.0
+
+
+def resolve_data_path():
+    for path in CANDIDATE_PATHS:
+        if path.exists():
+            return path
+
+    checked = "\n".join(str(p) for p in CANDIDATE_PATHS)
+    raise FileNotFoundError(
+        f"Could not find dataset. Checked:\n{checked}"
+    )
 
 
 def normalize_text(value):
@@ -38,17 +57,21 @@ def tokenize(value):
 def parse_listish(value):
     if value is None:
         return []
+
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
+
     text = str(value).strip()
     if not text:
         return []
+
     try:
         parsed = ast.literal_eval(text)
         if isinstance(parsed, list):
             return [str(item).strip() for item in parsed if str(item).strip()]
     except Exception:
         pass
+
     pieces = re.split(r",\s*(?=(?:[^']*'[^']*')*[^']*$)", text)
     return [piece.strip(" '\"") for piece in pieces if piece.strip(" '\"")]
 
@@ -103,13 +126,34 @@ def nutrition_status_for_row(row):
 def add_final_columns(df):
     df = df.copy()
 
-    df["final_calories"] = df.apply(lambda row: first_present(row, ["clean_calories", "estimated_calories", "calories"]), axis=1)
-    df["final_protein_g"] = df.apply(lambda row: first_present(row, ["protein_g", "estimated_protein_g"]), axis=1)
-    df["final_carbs_g"] = df.apply(lambda row: first_present(row, ["carbs_g", "estimated_carbs_g"]), axis=1)
-    df["final_fat_g"] = df.apply(lambda row: first_present(row, ["fat_g", "estimated_fat_g"]), axis=1)
-    df["final_fiber_g"] = df.apply(lambda row: first_present(row, ["fiber_g", "estimated_fiber_g"]), axis=1)
-    df["final_sodium_mg"] = df.apply(lambda row: first_present(row, ["sodium_mg", "estimated_sodium_mg"]), axis=1)
-    df["final_servings"] = df.apply(lambda row: first_present(row, ["servings", "estimated_servings"]), axis=1)
+    df["final_calories"] = df.apply(
+        lambda row: first_present(row, ["clean_calories", "estimated_calories", "calories"]),
+        axis=1,
+    )
+    df["final_protein_g"] = df.apply(
+        lambda row: first_present(row, ["protein_g", "estimated_protein_g"]),
+        axis=1,
+    )
+    df["final_carbs_g"] = df.apply(
+        lambda row: first_present(row, ["carbs_g", "estimated_carbs_g"]),
+        axis=1,
+    )
+    df["final_fat_g"] = df.apply(
+        lambda row: first_present(row, ["fat_g", "estimated_fat_g"]),
+        axis=1,
+    )
+    df["final_fiber_g"] = df.apply(
+        lambda row: first_present(row, ["fiber_g", "estimated_fiber_g"]),
+        axis=1,
+    )
+    df["final_sodium_mg"] = df.apply(
+        lambda row: first_present(row, ["sodium_mg", "estimated_sodium_mg"]),
+        axis=1,
+    )
+    df["final_servings"] = df.apply(
+        lambda row: first_present(row, ["servings", "estimated_servings"]),
+        axis=1,
+    )
 
     df["_cal"] = pd.to_numeric(df["final_calories"], errors="coerce")
     df["_protein"] = pd.to_numeric(df["final_protein_g"], errors="coerce")
@@ -120,7 +164,16 @@ def add_final_columns(df):
     df["_servings"] = pd.to_numeric(df["final_servings"], errors="coerce")
 
     df["nutrition_available"] = (
-        df[["final_calories", "final_protein_g", "final_carbs_g", "final_fat_g", "final_fiber_g", "final_sodium_mg"]]
+        df[
+            [
+                "final_calories",
+                "final_protein_g",
+                "final_carbs_g",
+                "final_fat_g",
+                "final_fiber_g",
+                "final_sodium_mg",
+            ]
+        ]
         .astype(str)
         .apply(lambda row: any(item.strip() not in {"", "nan", "None"} for item in row), axis=1)
     )
@@ -158,10 +211,8 @@ def add_final_columns(df):
 
 
 def load_data():
-    if not DATA_PATH.exists():
-        raise FileNotFoundError(f"Could not find dataset at {DATA_PATH}")
-
-    df = pd.read_csv(DATA_PATH).fillna("")
+    data_path = resolve_data_path()
+    df = pd.read_csv(data_path).fillna("")
 
     expected = ["title", "ingredients", "directions", "link", "source", "site", "NER"]
     for col in expected:
@@ -190,32 +241,42 @@ def load_data():
     return df
 
 
-DF = load_data()
+def ensure_models_loaded():
+    global DF
+    global TFIDF_VECTORIZER, TFIDF_MATRIX
+    global SVD_COMPONENTS, SVD_MODEL, SVD_MATRIX, SVD_VARIANCE
 
-TFIDF_VECTORIZER = TfidfVectorizer(
-    stop_words="english",
-    ngram_range=(1, 2),
-    min_df=2,
-    max_df=0.90,
-    sublinear_tf=True,
-)
+    if DF is not None:
+        return
 
-TFIDF_MATRIX = TFIDF_VECTORIZER.fit_transform(DF["document_text"])
+    DF = load_data()
 
-if TFIDF_MATRIX.shape[1] > 2 and TFIDF_MATRIX.shape[0] > 2:
-    probe_k = max(2, min(300, TFIDF_MATRIX.shape[0] - 1, TFIDF_MATRIX.shape[1] - 1))
-    probe_model = TruncatedSVD(n_components=probe_k, random_state=42)
-    probe_model.fit(TFIDF_MATRIX)
-    cumvar = np.cumsum(probe_model.explained_variance_ratio_)
-    SVD_COMPONENTS = max(2, int(np.searchsorted(cumvar, 0.80)) + 1)
-    SVD_MODEL = TruncatedSVD(n_components=SVD_COMPONENTS, random_state=42)
-    SVD_MATRIX = normalize(SVD_MODEL.fit_transform(TFIDF_MATRIX))
-    SVD_VARIANCE = float(SVD_MODEL.explained_variance_ratio_.sum())
-else:
-    SVD_COMPONENTS = 0
-    SVD_MODEL = None
-    SVD_MATRIX = None
-    SVD_VARIANCE = 0.0
+    TFIDF_VECTORIZER = TfidfVectorizer(
+        stop_words="english",
+        ngram_range=(1, 2),
+        min_df=2,
+        max_df=0.90,
+        sublinear_tf=True,
+    )
+
+    TFIDF_MATRIX = TFIDF_VECTORIZER.fit_transform(DF["document_text"])
+
+    if TFIDF_MATRIX.shape[1] > 2 and TFIDF_MATRIX.shape[0] > 2:
+        probe_k = max(2, min(300, TFIDF_MATRIX.shape[0] - 1, TFIDF_MATRIX.shape[1] - 1))
+        probe_model = TruncatedSVD(n_components=probe_k, random_state=42)
+        probe_model.fit(TFIDF_MATRIX)
+
+        cumvar = np.cumsum(probe_model.explained_variance_ratio_)
+        SVD_COMPONENTS = max(2, int(np.searchsorted(cumvar, 0.80)) + 1)
+
+        SVD_MODEL = TruncatedSVD(n_components=SVD_COMPONENTS, random_state=42)
+        SVD_MATRIX = normalize(SVD_MODEL.fit_transform(TFIDF_MATRIX))
+        SVD_VARIANCE = float(SVD_MODEL.explained_variance_ratio_.sum())
+    else:
+        SVD_COMPONENTS = 0
+        SVD_MODEL = None
+        SVD_MATRIX = None
+        SVD_VARIANCE = 0.0
 
 
 def lexical_overlap_bonus(query, row):
@@ -235,6 +296,8 @@ def lexical_overlap_bonus(query, row):
 
 
 def retrieve_candidates(query, model_name, top_k=250):
+    ensure_models_loaded()
+
     cleaned_query = normalize_text(query)
     if not cleaned_query:
         return DF.iloc[0:0].copy()
@@ -260,7 +323,10 @@ def retrieve_candidates(query, model_name, top_k=250):
     ).round(1)
     result["retrieval_method"] = retrieval_method
 
-    result = result.sort_values(["similarity_score", "model_score", "tfidf_score"], ascending=[False, False, False])
+    result = result.sort_values(
+        ["similarity_score", "model_score", "tfidf_score"],
+        ascending=[False, False, False],
+    )
 
     threshold = 8.0 if retrieval_method == "svd" else 5.0
     filtered = result[result["similarity_score"] >= threshold].copy()
@@ -330,6 +396,8 @@ def build_payload(row, profile=""):
 
 @bp.get("/mealmap/meta")
 def meta():
+    ensure_models_loaded()
+
     available_count = int(DF["nutrition_available"].sum())
     return jsonify(
         {
