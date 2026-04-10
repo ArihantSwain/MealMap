@@ -13,7 +13,11 @@ from sklearn.preprocessing import normalize
 bp = Blueprint("bp", __name__)
 
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = BASE_DIR.parent / "data" / "recipes_enriched.csv"
+DATA_PATH = Path(os.getenv("DATA_PATH", BASE_DIR / "data" / "recipes_enriched.csv"))
+if not DATA_PATH.exists():
+    alt = BASE_DIR.parent / "data" / "recipes_enriched.csv"
+    if alt.exists():
+        DATA_PATH = alt
 
 SEARCH_LIMIT = 12
 RECOMMEND_LIMIT = 24
