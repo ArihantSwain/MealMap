@@ -3,6 +3,7 @@ let currentRecipes = [];
 let currentMatches = [];
 let selectedFood = "";
 let currentModel = "svd";
+let autocompleteTimer = null;
 
 const searchInput = document.getElementById("searchInput");
 const searchButton = document.getElementById("searchButton");
@@ -14,6 +15,7 @@ const activeState = document.getElementById("activeState");
 const resultsTitle = document.getElementById("resultsTitle");
 const metaPills = document.getElementById("metaPills");
 const modelSelect = document.getElementById("modelSelect");
+const matchDropdown = document.getElementById("matchDropdown");
 
 const recipeModal = document.getElementById("recipeModal");
 const modalBackdrop = document.getElementById("modalBackdrop");
@@ -74,6 +76,56 @@ function updateResultsTitle(prefix = "Results") {
     return;
   }
   resultsTitle.textContent = `${prefix} for "${selectedFood}"`;
+}
+function hideMatchDropdown() {
+  currentMatches = [];
+  matchDropdown.innerHTML = "";
+  matchDropdown.classList.add("hidden");
+}
+
+function showMatchDropdown() {
+  matchDropdown.classList.remove("hidden");
+}
+function renderMatchDropdown(matches) {
+  currentMatches = matches || [];
+
+  if (!currentMatches.length) {
+    matchDropdown.innerHTML = `<div class="match-dropdown-empty">No close matches found.</div>`;
+    showMatchDropdown();
+    return;
+  }
+
+  matchDropdown.innerHTML = currentMatches
+    .slice(0, 8)
+    .map(
+      (match, index) => `
+        <button class="match-dropdown-item" type="button" data-index="${index}">
+          <div class="match-dropdown-title">${escapeHtml(match.title || "Untitled")}</div>
+          <div class="match-dropdown-meta">
+            <span>${escapeHtml(niceModelLabel(match.retrieval_method || currentModel))}</span>
+            <span>Similarity ${displayValue(match.similarity_score, "%")}</span>
+            <span>${escapeHtml(match.nutrition_status || "Nutrition info")}</span>
+          </div>
+        </button>
+      `
+    )
+    .join("");
+
+  showMatchDropdown();
+
+  document.querySelectorAll(".match-dropdown-item").forEach((button) => {
+    button.addEventListener("click", () => {
+      const match = currentMatches[Number(button.dataset.index)];
+      if (!match) return;
+
+      selectedFood = match.title || "";
+      searchInput.value = selectedFood;
+      hideMatchDropdown();
+      updateActiveState();
+      updateResultsTitle("Recipes");
+      fetchRecommendations(selectedFood);
+    });
+  });
 }
 
 function recipeCard(recipe, index) {
@@ -268,6 +320,28 @@ async function fetchMeta() {
   }
 }
 
+async function fetchMatchSuggestions(query) {
+  const cleanQuery = (query || "").trim();
+
+  if (!cleanQuery) {
+    hideMatchDropdown();
+    return;
+  }
+
+  currentModel = modelSelect.value || "svd";
+
+  try {
+    const response = await fetch(
+      `/mealmap/matches?query=${encodeURIComponent(cleanQuery)}&profile=${encodeURIComponent(currentDiet || "none")}&model=${encodeURIComponent(currentModel)}`
+    );
+    const data = await response.json();
+    renderMatchDropdown(data.matches || []);
+  } catch (error) {
+    console.error(error);
+    hideMatchDropdown();
+  }
+}
+
 async function fetchMatches() {
   const query = searchInput.value.trim();
   if (!query) {
@@ -314,19 +388,80 @@ async function fetchRecommendations(selected) {
   }
 }
 
-searchButton.addEventListener("click", fetchMatches);
+searchButton.addEventListener("click", () => {
+  if (currentMatches.length) {
+    const firstMatch = currentMatches[0];
+    selectedFood = firstMatch.title || "";
+    searchInput.value = selectedFood;
+    hideMatchDropdown();
+    fetchRecommendations(selectedFood);
+    return;
+  }
+
+  const query = searchInput.value.trim();
+  if (!query) {
+    setStatus("Type a dish before searching.", true);
+    return;
+  }
+
+  fetchRecommendations(query);
+});
+
+searchInput.addEventListener("input", () => {
+  const query = searchInput.value.trim();
+  selectedFood = "";
+  updateActiveState();
+  updateResultsTitle();
+
+  clearTimeout(autocompleteTimer);
+
+  if (!query) {
+    hideMatchDropdown();
+    return;
+  }
+
+  autocompleteTimer = setTimeout(() => {
+    fetchMatchSuggestions(query);
+  }, 250);
+});
 
 searchInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
-    fetchMatches();
+    event.preventDefault();
+
+    if (currentMatches.length) {
+      const firstMatch = currentMatches[0];
+      selectedFood = firstMatch.title || "";
+      searchInput.value = selectedFood;
+      hideMatchDropdown();
+      fetchRecommendations(selectedFood);
+      return;
+    }
+
+    const query = searchInput.value.trim();
+    if (!query) {
+      setStatus("Type a dish before searching.", true);
+      return;
+    }
+
+    fetchRecommendations(query);
+  }
+
+  if (event.key === "Escape") {
+    hideMatchDropdown();
   }
 });
 
 modelSelect.addEventListener("change", () => {
   currentModel = modelSelect.value || "svd";
   updateActiveState();
+
+  const query = searchInput.value.trim();
+
   if (selectedFood) {
     fetchRecommendations(selectedFood);
+  } else if (query) {
+    fetchMatchSuggestions(query);
   }
 });
 
@@ -347,6 +482,9 @@ filterButtons.forEach((button) => {
 
     if (selectedFood) {
       fetchRecommendations(selectedFood);
+    } else {
+      const query = searchInput.value.trim();
+      if (query) fetchMatchSuggestions(query);
     }
   });
 });
@@ -358,6 +496,9 @@ clearFiltersButton.addEventListener("click", () => {
 
   if (selectedFood) {
     fetchRecommendations(selectedFood);
+  } else {
+    const query = searchInput.value.trim();
+    if (query) fetchMatchSuggestions(query);
   }
 });
 
@@ -367,6 +508,17 @@ modalBackdrop.addEventListener("click", closeRecipeModal);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !recipeModal.classList.contains("hidden")) {
     closeRecipeModal();
+  }
+});
+
+document.addEventListener("click", (event) => {
+  const clickedInside =
+    searchInput.contains(event.target) ||
+    searchButton.contains(event.target) ||
+    matchDropdown.contains(event.target);
+
+  if (!clickedInside) {
+    hideMatchDropdown();
   }
 });
 

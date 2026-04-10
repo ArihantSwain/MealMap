@@ -23,9 +23,12 @@
       <section class="panel search-panel">
         <div class="search-card">
           <label class="section-label" for="searchInput">Search for a food or dish</label>
-          <div class="search-row">
-            <input id="searchInput" type="text" placeholder="ex: chicken alfredo, turkey chili, veggie pasta" />
-            <button id="searchButton" type="button">Search</button>
+          <div class="search-autocomplete-wrap">
+            <div class="search-row">
+              <input id="searchInput" type="text" placeholder="ex: chicken alfredo, turkey chili, veggie pasta" autocomplete="off" />
+              <button id="searchButton" type="button">Search</button>
+            </div>
+            <div id="matchDropdown" class="match-dropdown hidden"></div>
           </div>
 
           <div style="margin-bottom: 18px;">
