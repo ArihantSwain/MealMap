@@ -2,7 +2,7 @@ from pathlib import Path
 import ast
 import re
 import numpy as np
-
+import os 
 import pandas as pd
 from flask import Blueprint, jsonify, request
 from sklearn.decomposition import TruncatedSVD
