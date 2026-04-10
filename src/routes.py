@@ -20,12 +20,22 @@ RECOMMEND_LIMIT = 24
 DEFAULT_MODEL = "svd"
 
 DF = None
+
 TFIDF_VECTORIZER = None
 TFIDF_MATRIX = None
+
 SVD_COMPONENTS = 0
 SVD_MODEL = None
 SVD_MATRIX = None
 SVD_VARIANCE = 0.0
+
+RECOMMEND_TFIDF_VECTORIZER = None
+RECOMMEND_TFIDF_MATRIX = None
+
+RECOMMEND_SVD_COMPONENTS = 0
+RECOMMEND_SVD_MODEL = None
+RECOMMEND_SVD_MATRIX = None
+RECOMMEND_SVD_VARIANCE = 0.0
 
 def normalize_text(value):
     text = str(value or "").lower().strip()
@@ -207,6 +217,9 @@ def load_data():
     df["ingredients"] = df["ingredients"].astype(str)
     df["directions"] = df["directions"].astype(str)
     df["NER"] = df["NER"].astype(str)
+    df["ingredients_joined"] = df["ingredients"].apply(lambda x: " ".join(parse_listish(x))).map(normalize_text)
+    df["directions_joined"] = df["directions"].apply(lambda x: " ".join(parse_listish(x))).map(normalize_text)
+    df["ner_joined"] = df["NER"].apply(lambda x: " ".join(parse_listish(x))).map(normalize_text)
 
     df["normalized_title"] = df["title"].map(normalize_text)
     df["normalized_ingredients"] = df["ingredients"].map(normalize_text)
@@ -217,9 +230,14 @@ def load_data():
 
     df["document_text"] = (
         df["title"].fillna("").astype(str) + " "
-        + df["title"].fillna("").astype(str) + " "
-        + df["NER"].fillna("").astype(str) + " "
-        + df["ingredients"].fillna("").astype(str)
+        + df["ner_joined"].fillna("").astype(str) + " "
+        + df["ingredients_joined"].fillna("").astype(str)
+    ).map(normalize_text)
+
+    df["recommendation_text"] = (
+        df["ner_joined"].fillna("").astype(str) + " "
+        + df["ingredients_joined"].fillna("").astype(str) + " "
+        + df["directions_joined"].fillna("").astype(str)
     ).map(normalize_text)
 
     return df
@@ -227,8 +245,12 @@ def load_data():
 
 def ensure_models_loaded():
     global DF
+
     global TFIDF_VECTORIZER, TFIDF_MATRIX
     global SVD_COMPONENTS, SVD_MODEL, SVD_MATRIX, SVD_VARIANCE
+
+    global RECOMMEND_TFIDF_VECTORIZER, RECOMMEND_TFIDF_MATRIX
+    global RECOMMEND_SVD_COMPONENTS, RECOMMEND_SVD_MODEL, RECOMMEND_SVD_MATRIX, RECOMMEND_SVD_VARIANCE
 
     if DF is not None:
         return
@@ -244,6 +266,36 @@ def ensure_models_loaded():
     )
 
     TFIDF_MATRIX = TFIDF_VECTORIZER.fit_transform(DF["document_text"])
+
+    RECOMMEND_TFIDF_VECTORIZER = TfidfVectorizer(
+        stop_words="english",
+        ngram_range=(1, 2),
+        min_df=2,
+        max_df=0.90,
+        sublinear_tf=True,
+    )
+
+    RECOMMEND_TFIDF_MATRIX = RECOMMEND_TFIDF_VECTORIZER.fit_transform(DF["recommendation_text"])
+
+    if RECOMMEND_TFIDF_MATRIX.shape[1] > 2 and RECOMMEND_TFIDF_MATRIX.shape[0] > 2:
+        recommend_probe_k = max(
+            2,
+            min(300, RECOMMEND_TFIDF_MATRIX.shape[0] - 1, RECOMMEND_TFIDF_MATRIX.shape[1] - 1),
+        )
+        recommend_probe_model = TruncatedSVD(n_components=recommend_probe_k, random_state=42)
+        recommend_probe_model.fit(RECOMMEND_TFIDF_MATRIX)
+
+        recommend_cumvar = np.cumsum(recommend_probe_model.explained_variance_ratio_)
+        RECOMMEND_SVD_COMPONENTS = max(2, int(np.searchsorted(recommend_cumvar, 0.80)) + 1)
+
+        RECOMMEND_SVD_MODEL = TruncatedSVD(n_components=RECOMMEND_SVD_COMPONENTS, random_state=42)
+        RECOMMEND_SVD_MATRIX = normalize(RECOMMEND_SVD_MODEL.fit_transform(RECOMMEND_TFIDF_MATRIX))
+        RECOMMEND_SVD_VARIANCE = float(RECOMMEND_SVD_MODEL.explained_variance_ratio_.sum())
+    else:
+        RECOMMEND_SVD_COMPONENTS = 0
+        RECOMMEND_SVD_MODEL = None
+        RECOMMEND_SVD_MATRIX = None
+        RECOMMEND_SVD_VARIANCE = 0.0
 
     if TFIDF_MATRIX.shape[1] > 2 and TFIDF_MATRIX.shape[0] > 2:
         probe_k = max(2, min(300, TFIDF_MATRIX.shape[0] - 1, TFIDF_MATRIX.shape[1] - 1))
@@ -321,6 +373,62 @@ def retrieve_candidates(query, model_name, top_k=250):
         filtered = filtered.head(top_k).copy()
 
     return filtered
+
+def recommend_from_selected_recipe(selected_title, model_name, top_k=350):
+    ensure_models_loaded()
+
+    cleaned_title = normalize_text(selected_title)
+    if not cleaned_title:
+        return DF.iloc[0:0].copy()
+
+    exact_matches = DF.index[DF["normalized_title"] == cleaned_title].tolist()
+
+    if exact_matches:
+        selected_idx = exact_matches[0]
+    else:
+        title_query = TFIDF_VECTORIZER.transform([cleaned_title])
+        title_scores = cosine_similarity(title_query, TFIDF_MATRIX).ravel()
+        selected_idx = int(np.argmax(title_scores))
+
+    tfidf_scores = cosine_similarity(
+        RECOMMEND_TFIDF_MATRIX[selected_idx:selected_idx + 1],
+        RECOMMEND_TFIDF_MATRIX
+    ).ravel()
+
+    if model_name == "svd" and RECOMMEND_SVD_MODEL is not None and RECOMMEND_SVD_MATRIX is not None:
+        model_scores = cosine_similarity(
+            RECOMMEND_SVD_MATRIX[selected_idx:selected_idx + 1],
+            RECOMMEND_SVD_MATRIX
+        ).ravel()
+        retrieval_method = "svd"
+    else:
+        model_scores = tfidf_scores
+        retrieval_method = "tfidf"
+
+    result = DF.copy()
+    result["tfidf_score"] = tfidf_scores * 100.0
+    result["model_score"] = model_scores * 100.0
+    result["lexical_bonus"] = 0.0
+    result["similarity_score"] = result["model_score"].round(1)
+    result["retrieval_method"] = retrieval_method
+
+    selected_title_tokens = tokenize(DF.iloc[selected_idx]["title"])
+    result["title_overlap_count"] = result["title"].apply(
+        lambda title: len(selected_title_tokens & tokenize(title))
+    )
+
+    result["similarity_score"] = (
+        result["similarity_score"] - result["title_overlap_count"] * 1.0
+    ).round(1)
+
+    result = result.drop(index=selected_idx)
+
+    result = result.sort_values(
+        ["similarity_score", "model_score", "tfidf_score"],
+        ascending=[False, False, False],
+    )
+
+    return result.head(top_k).copy()
 
 
 def profile_sort(df, profile):
@@ -439,9 +547,11 @@ def recommend():
     if not selected:
         return jsonify({"recipes": []})
 
-    candidates = retrieve_candidates(selected, model_name=model_name, top_k=350)
+    candidates = recommend_from_selected_recipe(selected, model_name=model_name, top_k=350)
     if candidates.empty:
         return jsonify({"recipes": []})
+    
+    
 
     ranked = profile_sort(candidates, profile).head(RECOMMEND_LIMIT)
     payload = [build_payload(row, profile) for _, row in ranked.iterrows()]

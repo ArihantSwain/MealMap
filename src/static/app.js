@@ -188,56 +188,6 @@ function renderRecipes(recipes) {
   });
 }
 
-function renderMatchChoices(matches) {
-  currentMatches = matches;
-
-  if (!matches.length) {
-    recipesGrid.innerHTML = "";
-    setStatus("No close matches found.", true);
-    return;
-  }
-
-  recipesGrid.innerHTML = matches
-    .map(
-      (match, index) => `
-        <article class="card">
-          <div class="card-top">
-            <div>
-              <h3>${escapeHtml(match.title || "Untitled")}</h3>
-              <div class="meta-row">
-                <span class="badge">Similarity ${displayValue(match.similarity_score, "%")}</span>
-                <span class="badge">${escapeHtml(niceModelLabel(match.retrieval_method || currentModel))}</span>
-                <span class="badge">Model ${displayValue(match.model_score, "%")}</span>
-                <span class="badge">TF-IDF ${displayValue(match.tfidf_score, "%")}</span>
-                <span class="badge">Servings ${displayValue(match.servings)}</span>
-                <span class="badge">${escapeHtml(match.nutrition_status || "Nutrition info")}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="nutrition-grid">
-            <div class="nutrition-box"><div class="label">Calories</div><div class="value">${displayValue(match.calories)}</div></div>
-            <div class="nutrition-box"><div class="label">Protein</div><div class="value">${displayValue(match.protein_g, "g")}</div></div>
-            <div class="nutrition-box"><div class="label">Carbs</div><div class="value">${displayValue(match.carbs_g, "g")}</div></div>
-            <div class="nutrition-box"><div class="label">Fat</div><div class="value">${displayValue(match.fat_g, "g")}</div></div>
-            <div class="nutrition-box"><div class="label">Fiber</div><div class="value">${displayValue(match.fiber_g, "g")}</div></div>
-            <div class="nutrition-box"><div class="label">Sodium</div><div class="value">${displayValue(match.sodium_mg, " mg")}</div></div>
-          </div>
-
-          <button class="primary-btn match-select-btn" data-index="${index}">Use This Recipe</button>
-        </article>
-      `
-    )
-    .join("");
-
-  setStatus(`Found ${matches.length} close matches using ${niceModelLabel(currentModel)}. Pick the best one.`);
-  document.querySelectorAll(".match-select-btn").forEach((button) => {
-    button.addEventListener("click", () => {
-      const match = currentMatches[Number(button.dataset.index)];
-      fetchRecommendations(match.title);
-    });
-  });
-}
 
 function listMarkup(items, ordered = false) {
   const cleanItems = normalizeList(items);
@@ -342,32 +292,6 @@ async function fetchMatchSuggestions(query) {
   }
 }
 
-async function fetchMatches() {
-  const query = searchInput.value.trim();
-  if (!query) {
-    setStatus("Type a dish before searching.", true);
-    return;
-  }
-
-  selectedFood = query;
-  currentModel = modelSelect.value || "svd";
-  updateActiveState();
-  updateResultsTitle("Matches");
-  recipesGrid.innerHTML = "";
-  setStatus(`Searching with ${niceModelLabel(currentModel)}...`);
-
-  try {
-    const response = await fetch(
-      `/mealmap/matches?query=${encodeURIComponent(query)}&profile=${encodeURIComponent(currentDiet || "none")}&model=${encodeURIComponent(currentModel)}`
-    );
-    const data = await response.json();
-    renderMatchChoices(data.matches || []);
-  } catch (error) {
-    console.error(error);
-    setStatus("Could not load matches.", true);
-  }
-}
-
 async function fetchRecommendations(selected) {
   selectedFood = selected;
   currentModel = modelSelect.value || "svd";
@@ -381,6 +305,7 @@ async function fetchRecommendations(selected) {
       `/mealmap/recommend?selected=${encodeURIComponent(selected)}&profile=${encodeURIComponent(currentDiet || "none")}&model=${encodeURIComponent(currentModel)}`
     );
     const data = await response.json();
+    hideMatchDropdown();
     renderRecipes(data.recipes || []);
   } catch (error) {
     console.error(error);
