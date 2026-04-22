@@ -21,10 +21,6 @@
         </div>
       </div>
       <div class="topbar-right">
-        <a href="/chat" class="nav-link">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          Chat
-        </a>
         <div id="metaPills" class="meta-pills"></div>
         <button id="mealPlanBtn" class="meal-plan-btn" type="button">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg>
@@ -40,7 +36,7 @@
           <label class="section-label" for="searchInput">Search for a dish</label>
           <div class="search-autocomplete-wrap">
             <div class="search-row">
-              <input id="searchInput" type="text" placeholder="e.g. chicken alfredo, veggie pasta…" autocomplete="off" />
+              <input id="searchInput" type="text" placeholder="ex. yummy taco options" autocomplete="off" />
               <button id="searchButton" type="button">Search</button>
             </div>
             <div id="matchDropdown" class="match-dropdown hidden"></div>
@@ -86,6 +82,14 @@
         </div>
 
         <div id="statusMessage" class="status"></div>
+
+        <section id="llmAnswerPanel" hidden>
+          <div class="results-card">
+            <h3>LLM Response:</h3>
+            <div id="llmAnswerText"></div>
+            <div id="ragMeta" class="meta-row"></div>
+          </div>
+        </section>
         <div id="recipesGrid" class="grid"></div>
       </section>
     </main>

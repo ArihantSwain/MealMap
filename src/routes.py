@@ -2,6 +2,11 @@ from pathlib import Path
 import ast
 import re
 
+import os
+import json
+import logging
+from infosci_spark_client import LLMClient
+
 import numpy as np
 import pandas as pd
 from flask import Blueprint, jsonify, request, session
@@ -9,6 +14,8 @@ from sklearn.decomposition import TruncatedSVD
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint("bp", __name__)
 
@@ -485,6 +492,183 @@ def build_payload(row, profile=""):
         "diet": profile if profile != "none" else "",
     }
 
+def llm_refine_mealmap_query(client, user_message, current_profile="none", current_model=DEFAULT_MODEL):
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You rewrite recipe-search requests into retrieval-friendly queries for an IR system.\n"
+                "Return exactly one JSON object and nothing else.\n"
+                "Do not use markdown.\n"
+                "Do not use code fences.\n"
+                "Do not add commentary before or after the JSON.\n"
+                "Use this exact schema:\n"
+                '{"refined_query":"...","profile":"...","model":"...","reason":"..."}\n'
+                "Rules:\n"
+                "- refined_query should be short, concrete, and optimized for retrieval.\n"
+                "- Keep the main dish, cuisine, ingredients, dietary goals, and meal type when relevant.\n"
+                "- Remove filler phrases like 'I want', 'can you find', 'something with'.\n"
+                "- profile must be one of: none, high_protein, low_carb, keto, low_calorie, low_fat, low_sodium, balanced, bodybuilding, vegan.\n"
+                "- model must be either tfidf or svd.\n"
+                "- reason should be one short sentence.\n"
+                "- If the user request is already a good search query, keep it close to the original.\n"
+                "Valid example:\n"
+                '{"refined_query":"chicken soup","profile":"none","model":"tfidf","reason":"Removed conversational phrasing and kept the main dish terms."}'
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"User request: {user_message}\n"
+                f"Current profile: {current_profile}\n"
+                f"Current model: {current_model}"
+            ),
+        },
+    ]
+
+    try:
+        response = client.chat(messages)
+    except Exception as e:
+        logger.warning("Refinement LLM call failed: %s", e)
+        return {
+            "refined_query": user_message,
+            "profile": current_profile,
+            "model": current_model,
+            "reason": "Fallback: LLM call failed.",
+        }
+
+    text = ""
+    if isinstance(response, dict):
+        text = (
+            response.get("content")
+            or response.get("text")
+            or response.get("output_text")
+            or ""
+        )
+    else:
+        text = str(response or "")
+
+    text = text.strip()
+    logger.warning("Raw refinement response: %r", text)
+
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*```$", "", text)
+
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        text = match.group(0).strip()
+
+    try:
+        data = json.loads(text)
+    except Exception as e:
+        logger.warning("Failed to parse refinement JSON; falling back. Error: %s", e)
+        return {
+            "refined_query": user_message,
+            "profile": current_profile,
+            "model": current_model,
+            "reason": "Fallback: could not parse LLM output.",
+        }
+
+    refined_query = str(data.get("refined_query", user_message)).strip() or user_message
+    profile = str(data.get("profile", current_profile)).strip().lower() or current_profile
+    model = str(data.get("model", current_model)).strip().lower() or current_model
+    reason = str(data.get("reason", "")).strip() or "Used LLM to refine the query."
+
+    valid_profiles = {
+        "none",
+        "high_protein",
+        "low_carb",
+        "keto",
+        "low_calorie",
+        "low_fat",
+        "low_sodium",
+        "balanced",
+        "bodybuilding",
+        "vegan",
+    }
+
+    if profile not in valid_profiles:
+        profile = current_profile
+
+    if model not in {"tfidf", "svd"}:
+        model = current_model
+
+    return {
+        "refined_query": refined_query,
+        "profile": profile,
+        "model": model,
+        "reason": reason,
+    }
+
+def build_recipe_context(recipes):
+    if not recipes:
+        return "No recipes retrieved."
+
+    chunks = []
+    for recipe in recipes:
+        ingredients = recipe.get("ingredients", [])[:8]
+        directions = recipe.get("directions", [])[:2]
+
+        chunks.append(
+            f"Title: {recipe.get('title', '')}\n"
+            f"Calories: {recipe.get('calories', 'N/A')}\n"
+            f"Protein: {recipe.get('protein_g', 'N/A')} g\n"
+            f"Carbs: {recipe.get('carbs_g', 'N/A')} g\n"
+            f"Fat: {recipe.get('fat_g', 'N/A')} g\n"
+            f"Ingredients: {', '.join(map(str, ingredients))}\n"
+            f"Directions: {' '.join(map(str, directions))}\n"
+            f"Similarity: {recipe.get('similarity_score', 'N/A')}"
+        )
+
+    return "\n\n---\n\n".join(chunks)
+
+def llm_answer_with_recipes(client, user_message, refined_query, recipes):
+    context_text = build_recipe_context(recipes)
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a recipe assistant. Use only the retrieved recipe information provided.\n"
+                "Return ONLY simple HTML for the answer body.\n"
+                "Formatting rules:\n"
+                "- Start with one short paragraph in <p>...</p>.\n"
+                "- Then group options into sections when helpful.\n"
+                "- Use <p><strong>Section Name</strong></p> for section headings.\n"
+                "- Use <ul> and <li> for recipe options.\n"
+                "- Each recipe option must start with <strong>Recipe Name:</strong> followed by 1-2 sentences.\n"
+                "- Do not use markdown.\n"
+                "- Do not use asterisks.\n"
+                "- Do not use quotation marks unless truly needed.\n"
+                "- Do not invent recipes not present in the retrieved context.\n"
+                "- Do not mention recipes that were not retrieved.\n"
+                "- Keep the answer concise, clean, and readable.\n"
+                "Example output:\n"
+                "<p>I found several good chicken options for you, including light dishes and heartier casseroles.</p>"
+                "<p><strong>Simple and Light</strong></p>"
+                "<ul>"
+                "<li><strong>Poached Chicken:</strong> A clean, basic option if you want something minimal and straightforward.</li>"
+                "<li><strong>Chicken and Noodles:</strong> A simple comfort-food choice with a classic preparation.</li>"
+                "</ul>"
+                "<p><strong>Comforting Casseroles</strong></p>"
+                "<ul>"
+                "<li><strong>Chicken Casserole:</strong> A filling option if you want something hearty and rich.</li>"
+                "</ul>"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Original user request: {user_message}\n"
+                f"Refined retrieval query: {refined_query}\n\n"
+                f"Retrieved recipes:\n\n{context_text}"
+            ),
+        },
+    ]
+
+    response = client.chat(messages)
+    return (response.get("content") or "").strip()
+
 
 @bp.get("/mealmap/meta")
 def meta():
@@ -556,6 +740,67 @@ def recommend():
     ranked = profile_sort(candidates, profile).head(RECOMMEND_LIMIT)
     payload = [build_payload(row, profile) for _, row in ranked.iterrows()]
     return jsonify({"recipes": payload})
+
+@bp.post("/mealmap/chat")
+def mealmap_chat():
+    ensure_models_loaded()
+
+    data = request.get_json() or {}
+    user_message = str(data.get("message", "")).strip()
+    profile = str(data.get("profile", "none")).strip().lower()
+    model_name = str(data.get("model", DEFAULT_MODEL)).strip().lower()
+
+    if not user_message:
+        return jsonify({"error": "Message is required"}), 400
+
+    if profile not in {
+        "none", "high_protein", "low_carb", "keto", "low_calorie",
+        "low_fat", "low_sodium", "balanced", "bodybuilding", "vegan"
+    }:
+        profile = "none"
+
+    if model_name not in {"tfidf", "svd"}:
+        model_name = DEFAULT_MODEL
+
+    api_key = os.getenv("SPARK_API_KEY")
+    if not api_key:
+        return jsonify({"error": "API_KEY not set"}), 500
+
+    client = LLMClient(api_key=api_key)
+
+    refinement = llm_refine_mealmap_query(
+        client,
+        user_message,
+        current_profile=profile,
+        current_model=model_name,
+    )
+
+    refined_query = refinement["refined_query"]
+    refined_profile = refinement["profile"]
+    refined_model = refinement["model"]
+
+    candidates = retrieve_candidates(refined_query, model_name=refined_model, top_k=200)
+    ranked = profile_sort(candidates, refined_profile).head(SEARCH_LIMIT)
+    payload = [build_payload(row, refined_profile) for _, row in ranked.iterrows()]
+
+    llm_answer = llm_answer_with_recipes(
+        client,
+        user_message=user_message,
+        refined_query=refined_query,
+        recipes=payload,
+    )
+
+    return jsonify(
+        {
+            "original_query": user_message,
+            "refined_query": refined_query,
+            "refinement_reason": refinement["reason"],
+            "profile_used": refined_profile,
+            "model_used": refined_model,
+            "matches": payload,
+            "answer": llm_answer,
+        }
+    )
 
 
 @bp.post("/mealplan/add")

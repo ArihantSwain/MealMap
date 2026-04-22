@@ -51,7 +51,7 @@ select {
   padding: 36px 20px 56px;
 }
 
-/* ── Header ── */
+/* Header */
 .topbar {
   display: flex;
   justify-content: space-between;
@@ -131,7 +131,7 @@ select {
   color: var(--primary-dark);
 }
 
-/* ── Layout ── */
+/* Layout */
 .layout {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
@@ -181,7 +181,7 @@ select {
   flex-shrink: 0;
 }
 
-/* ── Search ── */
+/* Search */
 .search-row {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -228,7 +228,7 @@ select {
   transform: translateY(-1px);
 }
 
-/* ── Model Select ── */
+/* Model Select */
 .model-select-wrap {
   margin-bottom: 20px;
 }
@@ -255,7 +255,7 @@ select {
   box-shadow: 0 0 0 4px rgba(194, 65, 12, 0.10);
 }
 
-/* ── Filters ── */
+/* Filters */
 .ghost-btn {
   border: 1.5px solid var(--border);
   border-radius: 10px;
@@ -322,7 +322,7 @@ select {
   color: white;
 }
 
-/* ── Results panel ── */
+/* Results panel */
 .results-header {
   display: flex;
   justify-content: space-between;
@@ -354,7 +354,7 @@ select {
   gap: 16px;
 }
 
-/* ── Recipe card ── */
+/* Recipe card */
 .card {
   background: var(--surface);
   border: 1.5px solid var(--border);
@@ -390,7 +390,7 @@ select {
   outline: none;
 }
 
-/* ── Nutrition grid ── */
+/* Nutrition grid */
 .nutrition-grid,
 .modal-nutrition-grid {
   display: grid;
@@ -437,9 +437,9 @@ select {
   content: "→";
 }
 
-/* ── Modal ── */
+/* Modal */
 .modal.hidden {
-  display: none;
+  display: none !important;
 }
 
 .modal {
@@ -547,7 +547,7 @@ select {
   color: var(--muted);
 }
 
-/* ── Autocomplete dropdown ── */
+/* Autocomplete dropdown */
 .search-autocomplete-wrap {
   position: relative;
   margin-bottom: 18px;
@@ -613,7 +613,7 @@ select {
   font-size: 14px;
 }
 
-/* ── Responsive ── */
+/* Responsive */
 @media (max-width: 920px) {
   .layout {
     grid-template-columns: 1fr;
@@ -663,7 +663,7 @@ select {
   }
 }
 
-/* ── Topbar right group ── */
+/* Topbar right group */
 .topbar-right {
   display: flex;
   align-items: center;
@@ -672,7 +672,7 @@ select {
   justify-content: flex-end;
 }
 
-/* ── Meal plan button ── */
+/* Meal plan button */
 .meal-plan-btn {
   display: flex;
   align-items: center;
@@ -713,7 +713,7 @@ select {
   display: none;
 }
 
-/* ── Add to plan button (inside modal) ── */
+/* Add to plan button (inside modal) */
 .add-to-plan-btn {
   display: inline-flex;
   align-items: center;
@@ -740,7 +740,7 @@ select {
   color: var(--primary-dark);
 }
 
-/* ── Drawer ── */
+/* Drawer */
 .drawer.hidden {
   display: none;
 }
@@ -849,7 +849,7 @@ select {
   font-size: 14px;
 }
 
-/* ── Plan items ── */
+/* Plan items */
 .plan-item {
   display: flex;
   align-items: flex-start;
@@ -905,7 +905,7 @@ select {
   background: #fee2e2;
 }
 
-/* ── Shopping list ── */
+/* Shopping list */
 .shopping-back-btn {
   display: inline-flex;
   align-items: center;
@@ -993,7 +993,7 @@ select {
   transform: none;
 }
 
-/* ── Nav link ── */
+/* Nav link */
 .nav-link {
   display: inline-flex;
   align-items: center;
@@ -1013,7 +1013,7 @@ select {
   background: var(--primary-light);
 }
 
-/* ── Chat page ── */
+/* Chat page */
 .full-body-container {
   max-width: 900px;
   margin: 0 auto;

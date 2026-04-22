@@ -4,6 +4,7 @@ let currentMatches = [];
 let selectedFood = "";
 let currentModel = "tfidf";
 let autocompleteTimer = null;
+let selectedRecipeTitle = "";
 
 // tracks titles currently in the meal plan
 let planTitles = new Set();
@@ -19,6 +20,10 @@ const resultsTitle = document.getElementById("resultsTitle");
 const metaPills = document.getElementById("metaPills");
 const modelSelect = document.getElementById("modelSelect");
 const matchDropdown = document.getElementById("matchDropdown");
+
+const llmAnswerPanel = document.getElementById("llmAnswerPanel");
+const llmAnswerText = document.getElementById("llmAnswerText");
+const ragMeta = document.getElementById("ragMeta");
 
 const recipeModal = document.getElementById("recipeModal");
 const modalBackdrop = document.getElementById("modalBackdrop");
@@ -139,14 +144,33 @@ function renderMatchDropdown(matches) {
       const match = currentMatches[Number(button.dataset.index)];
       if (!match) return;
 
-      selectedFood = match.title || "";
-      searchInput.value = selectedFood;
+      selectedRecipeTitle = match.title || "";
+      selectedFood = selectedRecipeTitle;
+      searchInput.value = selectedRecipeTitle;
       hideMatchDropdown();
       updateActiveState();
       updateResultsTitle("Recipes");
-      fetchRecommendations(selectedFood);
+      fetchRecommendations(selectedRecipeTitle);
     });
   });
+}
+
+function renderRagAnswer(data) {
+  if (!data || !data.answer || !String(data.answer).trim()) {
+    llmAnswerPanel.hidden = true;
+    llmAnswerText.innerHTML = "";
+    ragMeta.innerHTML = "";
+    return;
+  }
+
+  llmAnswerText.innerHTML = data.answer;
+  ragMeta.innerHTML = `
+    <span class="badge">Original: ${escapeHtml(data.original_query || "")}</span>
+    <span class="badge">Refined: ${escapeHtml(data.refined_query || "")}</span>
+    <span class="badge">${escapeHtml(niceModelLabel(data.model_used || currentModel))}</span>
+    ${data.profile_used && data.profile_used !== "none" ? `<span class="badge">${escapeHtml(niceDietLabel(data.profile_used))}</span>` : ""}
+  `;
+  llmAnswerPanel.hidden = false;
 }
 
 // ── Recipe cards ──────────────────────────────────────────────────────────────
@@ -463,6 +487,54 @@ async function fetchMeta() {
   }
 }
 
+async function fetchRagAnswer(query) {
+  const cleanQuery = (query || "").trim();
+  if (!cleanQuery) {
+    setStatus("Type a dish before searching.", true);
+    return;
+  }
+
+  setStatus("Refining query and retrieving recipes...");
+  currentModel = modelSelect.value || "svd";
+
+  try {
+    const response = await fetch("/mealmap/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        message: cleanQuery,
+        profile: currentDiet || "none",
+        model: currentModel
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      setStatus(data.error || "Could not load RAG response.", true);
+      return;
+    }
+
+    selectedFood = data.refined_query || cleanQuery;
+    selectedRecipeTitle = "";
+    searchInput.value = selectedFood;
+    currentModel = data.model_used || currentModel;
+    modelSelect.value = currentModel;
+
+    updateActiveState();
+    updateResultsTitle("Matches");
+    renderRagAnswer(data);
+    renderRecipes(data.matches || []);
+    hideMatchDropdown();
+    setStatus(`Showing retrieved recipes for refined query: ${data.refined_query}`);
+  } catch (error) {
+    console.error(error);
+    setStatus("Could not load RAG response.", true);
+  }
+}
+
 async function fetchMatchSuggestions(query) {
   const cleanQuery = (query || "").trim();
 
@@ -486,7 +558,11 @@ async function fetchMatchSuggestions(query) {
 }
 
 async function fetchRecommendations(selected) {
+  selectedRecipeTitle = selected;
   selectedFood = selected;
+  llmAnswerPanel.hidden = true;
+  llmAnswerText.textContent = "";
+  ragMeta.innerHTML = "";
   currentModel = modelSelect.value || "tfidf";
   updateActiveState();
   updateResultsTitle("Recipes");
@@ -509,29 +585,26 @@ async function fetchRecommendations(selected) {
 // ── Event listeners ───────────────────────────────────────────────────────────
 
 searchButton.addEventListener("click", () => {
-  if (currentMatches.length) {
-    const firstMatch = currentMatches[0];
-    selectedFood = firstMatch.title || "";
-    searchInput.value = selectedFood;
-    hideMatchDropdown();
-    fetchRecommendations(selectedFood);
-    return;
-  }
-
   const query = searchInput.value.trim();
   if (!query) {
     setStatus("Type a dish before searching.", true);
     return;
   }
 
-  fetchRecommendations(query);
+  hideMatchDropdown();
+  fetchRagAnswer(query);
 });
 
 searchInput.addEventListener("input", () => {
   const query = searchInput.value.trim();
   selectedFood = "";
+  selectedRecipeTitle = "";
   updateActiveState();
   updateResultsTitle();
+
+  llmAnswerPanel.hidden = true;
+  llmAnswerText.innerHTML = "";
+  ragMeta.innerHTML = "";
 
   clearTimeout(autocompleteTimer);
 
@@ -549,22 +622,14 @@ searchInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
 
-    if (currentMatches.length) {
-      const firstMatch = currentMatches[0];
-      selectedFood = firstMatch.title || "";
-      searchInput.value = selectedFood;
-      hideMatchDropdown();
-      fetchRecommendations(selectedFood);
-      return;
-    }
-
     const query = searchInput.value.trim();
     if (!query) {
       setStatus("Type a dish before searching.", true);
       return;
     }
 
-    fetchRecommendations(query);
+    hideMatchDropdown();
+    fetchRagAnswer(query);
   }
 
   if (event.key === "Escape") {
@@ -578,8 +643,8 @@ modelSelect.addEventListener("change", () => {
 
   const query = searchInput.value.trim();
 
-  if (selectedFood) {
-    fetchRecommendations(selectedFood);
+  if (selectedRecipeTitle) {
+    fetchRecommendations(selectedRecipeTitle);
   } else if (query) {
     fetchMatchSuggestions(query);
   }
@@ -600,8 +665,8 @@ filterButtons.forEach((button) => {
 
     updateActiveState();
 
-    if (selectedFood) {
-      fetchRecommendations(selectedFood);
+    if (selectedRecipeTitle) {
+      fetchRecommendations(selectedRecipeTitle);
     } else {
       const query = searchInput.value.trim();
       if (query) fetchMatchSuggestions(query);
@@ -614,8 +679,8 @@ clearFiltersButton.addEventListener("click", () => {
   filterButtons.forEach((btn) => btn.classList.remove("active"));
   updateActiveState();
 
-  if (selectedFood) {
-    fetchRecommendations(selectedFood);
+  if (selectedRecipeTitle) {
+    fetchRecommendations(selectedRecipeTitle);
   } else {
     const query = searchInput.value.trim();
     if (query) fetchMatchSuggestions(query);
@@ -655,6 +720,10 @@ fetch("/mealplan")
     planTitles = new Set(plan.map((r) => r.title));
     updatePlanBadge();
   });
+
+llmAnswerPanel.hidden = true;
+llmAnswerText.innerHTML = "";
+ragMeta.innerHTML = "";
 
 fetchMeta();
 updateActiveState();
