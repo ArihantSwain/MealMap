@@ -22,20 +22,18 @@ const activeState = document.getElementById("activeState");
 const resultsTitle = document.getElementById("resultsTitle");
 const metaPills = document.getElementById("metaPills");
 const modelSelect = document.getElementById("modelSelect");
-const showModelOptions = document.getElementById("showModelOptions");
-const modelOptionsWrap = document.getElementById("modelOptionsWrap");
 const matchDropdown = document.getElementById("matchDropdown");
+const showListingDropdown = document.getElementById("showListingDropdown");
 
 const queryBreakdownBody = document.getElementById("queryBreakdownBody");
 const queryBreakdownEmpty = document.getElementById("queryBreakdownEmpty");
-const queryRadarSvg = document.getElementById("queryRadarSvg");
+const queryRadarMount = document.getElementById("queryRadarMount");
 const queryBreakdownExplain = document.getElementById("queryBreakdownExplain");
 const queryBreakdownBadge = document.getElementById("queryBreakdownBadge");
 
 const llmAnswerPanel = document.getElementById("llmAnswerPanel");
 const llmAnswerText = document.getElementById("llmAnswerText");
 const ragMeta = document.getElementById("ragMeta");
-const ragSources = document.getElementById("ragSources");
 
 const recipeModal = document.getElementById("recipeModal");
 const modalBackdrop = document.getElementById("modalBackdrop");
@@ -92,18 +90,7 @@ function recipeSourceUrl(recipe) {
 }
 
 function syncModelFromUI() {
-  if (showModelOptions && showModelOptions.checked && modelSelect) {
-    currentModel = modelSelect.value || defaultMealmapModel;
-  } else {
-    currentModel = defaultMealmapModel;
-  }
-}
-
-function applyModelVisibility() {
-  if (!modelOptionsWrap || !showModelOptions || !modelSelect) return;
-  const enabled = showModelOptions.checked;
-  modelOptionsWrap.classList.toggle("hidden", !enabled);
-  modelSelect.disabled = !enabled;
+  currentModel = (modelSelect && modelSelect.value) || defaultMealmapModel;
 }
 
 function normalizeList(value) {
@@ -115,9 +102,9 @@ function normalizeList(value) {
     .filter(Boolean);
 }
 
-function drawRadarChart(svg, labels, values, options = {}) {
-  if (!svg || !labels?.length || !values?.length || labels.length !== values.length) {
-    if (svg) svg.innerHTML = "";
+function drawRadarChart(mountEl, labels, values, options = {}) {
+  if (!mountEl || !labels?.length || !values?.length || labels.length !== values.length) {
+    if (mountEl) mountEl.innerHTML = "";
     return;
   }
   const vb = 304;
@@ -167,22 +154,21 @@ function drawRadarChart(svg, labels, values, options = {}) {
     g += `<text class="radar-label" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle">${escapeHtml(short)}</text>`;
   }
 
-  svg.setAttribute("viewBox", `0 0 ${vb} ${vb}`);
-  svg.innerHTML = g;
+  mountEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vb} ${vb}" role="img" aria-label="Topic radar">${g}</svg>`;
 }
 
 function resetQueryBreakdownToEmpty() {
-  if (!queryBreakdownBody || !queryBreakdownEmpty || !queryRadarSvg) return;
+  if (!queryBreakdownBody || !queryBreakdownEmpty || !queryRadarMount) return;
   queryBreakdownBody.classList.add("hidden");
   queryBreakdownEmpty.classList.remove("hidden");
   queryBreakdownEmpty.textContent = "Run a search to see which terms influenced the ranking!";
-  queryRadarSvg.innerHTML = "";
+  queryRadarMount.innerHTML = "";
   if (queryBreakdownExplain) queryBreakdownExplain.textContent = "";
   if (queryBreakdownBadge) queryBreakdownBadge.textContent = "—";
 }
 
 async function updateQueryBreakdownPanel(queryText) {
-  if (!queryBreakdownBody || !queryRadarSvg || !queryBreakdownEmpty) return;
+  if (!queryBreakdownBody || !queryRadarMount || !queryBreakdownEmpty) return;
   const q = (queryText || "").trim();
   if (!q) {
     resetQueryBreakdownToEmpty();
@@ -205,7 +191,7 @@ async function updateQueryBreakdownPanel(queryText) {
     }
     queryBreakdownEmpty.classList.add("hidden");
     queryBreakdownBody.classList.remove("hidden");
-    drawRadarChart(queryRadarSvg, data.axes, data.query_strength, {
+    drawRadarChart(queryRadarMount, data.axes, data.query_strength, {
       fill: currentModel === "svd" ? "rgba(22, 101, 52, 0.2)" : "rgba(100, 116, 139, 0.16)",
       stroke: currentModel === "svd" ? "#15803d" : "#64748b",
     });
@@ -223,13 +209,13 @@ async function updateQueryBreakdownPanel(queryText) {
 
 async function loadCardWhyExplain(card, recipe) {
   const explainEl = card.querySelector(".why-explain");
-  const svg = card.querySelector(".card-radar-svg");
-  if (!explainEl || !svg) return;
+  const mount = card.querySelector(".card-radar-mount");
+  if (!explainEl || !mount) return;
   const title = recipe?.title || "";
   const q =
     retrievalExplainQuery.trim() || lastUserQuery.trim() || searchInput.value.trim();
   explainEl.textContent = "Loading…";
-  svg.innerHTML = "";
+  mount.innerHTML = "";
   if (!q || !title) {
     explainEl.textContent = "Run a search first so we can compare your retrieval text to this recipe.";
     return;
@@ -247,7 +233,7 @@ async function loadCardWhyExplain(card, recipe) {
       Array.isArray(data.match_strength) && data.match_strength.length
         ? data.match_strength
         : data.query_strength;
-    drawRadarChart(svg, data.axes, vals, {
+    drawRadarChart(mount, data.axes, vals, {
       fill: "rgba(22, 101, 52, 0.22)",
       stroke: "#15803d",
     });
@@ -272,7 +258,7 @@ function updateActiveState() {
 
 function updateResultsTitle(prefix = "Results") {
   if (!selectedFood) {
-    resultsTitle.textContent = "Thinking...";
+    resultsTitle.textContent = "Results";
     return;
   }
   resultsTitle.textContent = `${prefix} for "${selectedFood}"`;
@@ -289,6 +275,11 @@ function showMatchDropdown() {
 }
 
 function renderMatchDropdown(matches) {
+  if (showListingDropdown && !showListingDropdown.checked) {
+    hideMatchDropdown();
+    return;
+  }
+
   currentMatches = matches || [];
 
   if (!currentMatches.length) {
@@ -337,7 +328,6 @@ function renderRagAnswer(data) {
     llmAnswerPanel.hidden = true;
     llmAnswerText.innerHTML = "";
     ragMeta.innerHTML = "";
-    if (ragSources) ragSources.innerHTML = "";
     return;
   }
 
@@ -348,27 +338,6 @@ function renderRagAnswer(data) {
     <span class="badge">${escapeHtml(niceModelLabel(data.model_used || currentModel))}</span>
     ${data.profile_used && data.profile_used !== "none" ? `<span class="badge">${escapeHtml(niceDietLabel(data.profile_used))}</span>` : ""}
   `;
-  if (ragSources) {
-    const sources = Array.isArray(data.sources) ? data.sources : [];
-    if (!sources.length) {
-      ragSources.innerHTML = "";
-    } else {
-      ragSources.innerHTML = `
-        <p><strong>Sources</strong></p>
-        <ul>
-          ${sources
-            .map((src) => {
-              const title = escapeHtml(src.title || "Recipe");
-              const url = String(src.url || "").trim();
-              if (!url) return `<li>${title}</li>`;
-              const href = /^https?:\/\//i.test(url) ? url : `https://${url.replace(/^www\./i, "")}`;
-              return `<li>${title} — <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">source</a></li>`;
-            })
-            .join("")}
-        </ul>
-      `;
-    }
-  }
   llmAnswerPanel.hidden = false;
 }
 
@@ -404,7 +373,7 @@ function recipeCard(recipe, index) {
           <button type="button" class="flip-back-btn">← Back to recipe</button>
           <p class="latent-kicker">Latent dimensions</p>
           <div class="card-radar-wrap">
-            <svg class="card-radar-svg" viewBox="0 0 304 304" role="img" aria-label="Recipe topic radar"></svg>
+            <div class="card-radar-mount" aria-label="Recipe topic radar"></div>
           </div>
           <p class="why-explain"></p>
         </div>
@@ -676,7 +645,6 @@ async function fetchMeta() {
     defaultMealmapModel = data.default_retrieval_model || "tfidf";
     if (modelSelect) modelSelect.value = defaultMealmapModel;
     syncModelFromUI();
-    applyModelVisibility();
     metaPills.innerHTML = `
       <span class="state-pill">${escapeHtml(data.dataset_size)} recipes</span>
       <span class="state-pill">${escapeHtml(data.nutrition_coverage)}% with nutrition data</span>
@@ -714,6 +682,7 @@ async function fetchRagAnswer(query) {
 
     if (!response.ok) {
       setStatus(data.error || "Could not load RAG response.", true);
+      resultsTitle.textContent = "Results";
       return;
     }
 
@@ -735,6 +704,7 @@ async function fetchRagAnswer(query) {
   } catch (error) {
     console.error(error);
     setStatus("Could not load RAG response.", true);
+    resultsTitle.textContent = "Results";
   }
 }
 
@@ -742,6 +712,11 @@ async function fetchMatchSuggestions(query) {
   const cleanQuery = (query || "").trim();
 
   if (!cleanQuery) {
+    hideMatchDropdown();
+    return;
+  }
+
+  if (showListingDropdown && !showListingDropdown.checked) {
     hideMatchDropdown();
     return;
   }
@@ -766,7 +741,6 @@ async function fetchRecommendations(selected) {
   llmAnswerPanel.hidden = true;
   llmAnswerText.textContent = "";
   ragMeta.innerHTML = "";
-  if (ragSources) ragSources.innerHTML = "";
   syncModelFromUI();
   updateActiveState();
   updateResultsTitle("Recipes");
@@ -824,6 +798,10 @@ searchInput.addEventListener("input", () => {
   }
 
   autocompleteTimer = setTimeout(() => {
+    if (showListingDropdown && !showListingDropdown.checked) {
+      hideMatchDropdown();
+      return;
+    }
     fetchMatchSuggestions(query);
   }, 250);
 });
@@ -849,24 +827,19 @@ searchInput.addEventListener("keydown", (event) => {
   }
 });
 
-if (showModelOptions) {
-  showModelOptions.addEventListener("change", () => {
-    applyModelVisibility();
-    syncModelFromUI();
-    updateActiveState();
-
-    const query = searchInput.value.trim();
-    if (selectedRecipeTitle) {
-      fetchRecommendations(selectedRecipeTitle);
-    } else if (query) {
-      fetchMatchSuggestions(query);
+if (showListingDropdown) {
+  showListingDropdown.addEventListener("change", () => {
+    if (!showListingDropdown.checked) {
+      hideMatchDropdown();
+      return;
     }
+    const query = searchInput.value.trim();
+    if (query) fetchMatchSuggestions(query);
   });
 }
 
 if (modelSelect) {
   modelSelect.addEventListener("change", () => {
-    if (showModelOptions && !showModelOptions.checked) return;
     syncModelFromUI();
     updateActiveState();
 
@@ -995,9 +968,7 @@ fetch("/mealplan")
 llmAnswerPanel.hidden = true;
 llmAnswerText.innerHTML = "";
 ragMeta.innerHTML = "";
-if (ragSources) ragSources.innerHTML = "";
 
 fetchMeta();
-applyModelVisibility();
 updateActiveState();
 resetQueryBreakdownToEmpty();

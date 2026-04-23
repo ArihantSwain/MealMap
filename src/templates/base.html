@@ -44,12 +44,12 @@
 
           <div class="model-toggle-row">
             <label class="toggle-label">
-              <input id="showModelOptions" type="checkbox" />
-              Show search method choice
+              <input id="showListingDropdown" type="checkbox" checked />
+              Show match suggestions while typing
             </label>
           </div>
 
-          <div id="modelOptionsWrap" class="model-select-wrap hidden">
+          <div id="modelOptionsWrap" class="model-select-wrap">
             <label class="section-label" for="modelSelect">Search method</label>
             <select id="modelSelect" class="model-select">
               <option value="tfidf">TF-IDF — keyword search</option>
@@ -85,7 +85,7 @@
               <div class="latent-card">
                 <p class="latent-kicker">Latent dimensions</p>
                 <div class="radar-wrap">
-                  <svg id="queryRadarSvg" viewBox="0 0 304 304" role="img" aria-label="Query topic radar"></svg>
+                  <div id="queryRadarMount" class="radar-mount" aria-label="Query topic radar"></div>
                 </div>
               </div>
               <p id="queryBreakdownExplain" class="qb-explain"></p>
@@ -99,7 +99,7 @@
         <div class="results-header">
           <div>
             <p class="section-label">Results</p>
-            <h2 id="resultsTitle">Thinking...</h2>
+            <h2 id="resultsTitle">Results</h2>
           </div>
           <div id="activeState" class="active-state"></div>
         </div>
@@ -111,7 +111,6 @@
             <h3>LLM Response:</h3>
             <div id="llmAnswerText"></div>
             <div id="ragMeta" class="meta-row"></div>
-            <div id="ragSources" class="rag-sources"></div>
           </div>
         </section>
         <div id="recipesGrid" class="grid"></div>

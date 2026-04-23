@@ -524,10 +524,16 @@ select {
   align-items: center;
 }
 
-#queryRadarSvg,
-.card-radar-svg {
+.radar-mount,
+.card-radar-mount {
   width: 100%;
   max-width: 260px;
+  min-height: 200px;
+}
+
+.radar-mount svg,
+.card-radar-mount svg {
+  width: 100%;
   height: auto;
   display: block;
 }
@@ -818,18 +824,15 @@ select {
   font-size: 14px;
 }
 
-.rag-sources {
-  margin-top: 10px;
-  font-size: 13px;
-  color: var(--muted);
+#llmAnswerText a {
+  color: var(--primary-dark);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 
-.rag-sources ul {
-  margin: 6px 0 0;
-  padding-left: 18px;
-}
-
-.rag-sources a {
+#llmAnswerText a:hover {
   color: var(--primary);
 }
 

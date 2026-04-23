@@ -4,6 +4,7 @@ import re
 
 import os
 import json
+import html
 import logging
 from infosci_spark_client import LLMClient
 
@@ -784,16 +785,66 @@ def build_recipe_context(recipes):
     return "\n\n---\n\n".join(chunks)
 
 
-def build_recipe_sources(recipes):
-    sources = []
+def recipe_public_url(recipe):
+    raw = str(recipe.get("link") or recipe.get("source") or recipe.get("site") or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith(("http://", "https://")):
+        return raw
+    return f"https://{raw.lstrip('/')}"
+
+
+def linkify_recipe_names_in_answer(answer_html, recipes):
+    """Prefer hyperlinked dish names: <a href="...">Title</a>: description."""
+    if not answer_html or not recipes:
+        return answer_html
+    out = str(answer_html)
     for recipe in recipes:
-        sources.append(
-            {
-                "title": recipe.get("title", ""),
-                "url": recipe.get("link", "") or recipe.get("source", "") or recipe.get("site", ""),
-            }
+        title = str(recipe.get("title") or "").strip()
+        if not title:
+            continue
+        href = recipe_public_url(recipe)
+        if not href:
+            continue
+        esc_href = html.escape(href, quote=True)
+        esc_title = html.escape(title)
+        pat = re.compile(
+            r"<strong>\s*" + re.escape(title) + r"\s*:\s*</strong>",
+            re.IGNORECASE,
         )
-    return sources
+        repl = (
+            f'<a href="{esc_href}" target="_blank" rel="noopener noreferrer">{esc_title}</a>:'
+        )
+        out, n = pat.subn(repl, out, count=1)
+        if n:
+            continue
+        pat2 = re.compile(
+            r"<strong>\s*" + re.escape(title) + r"\s*</strong>\s*:",
+            re.IGNORECASE,
+        )
+        out = pat2.sub(repl, out, count=1)
+    return out
+
+
+def strip_trailing_sources_block(answer_html):
+    """Remove a trailing 'Sources' list some models append."""
+    if not answer_html:
+        return answer_html
+    s = str(answer_html)
+    s = re.sub(
+        r'<p>\s*<strong>\s*Sources?\s*</strong>\s*</p>\s*<ul>.*?</ul>',
+        "",
+        s,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    s = re.sub(
+        r'<h[1-6][^>]*>\s*Sources?\s*</h[1-6]>\s*<ul>.*?</ul>',
+        "",
+        s,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return s.rstrip()
+
 
 def llm_answer_with_recipes(client, user_message, refined_query, recipes):
     context_text = build_recipe_context(recipes)
@@ -809,24 +860,26 @@ def llm_answer_with_recipes(client, user_message, refined_query, recipes):
                 "- Then group options into sections when helpful.\n"
                 "- Use <p><strong>Section Name</strong></p> for section headings.\n"
                 "- Use <ul> and <li> for recipe options.\n"
-                "- Each recipe option must start with <strong>Recipe Name:</strong> followed by 1-2 sentences.\n"
+                "- Each recipe option must start with the dish name as a hyperlink when the context includes a URL for that recipe:\n"
+                '  <li><a href="SOURCE_URL_FROM_CONTEXT" target="_blank" rel="noopener noreferrer">Recipe Name</a>: '
+                "one or two short sentences about the dish.</li>\n"
+                "- If no URL exists for a recipe in the context, use plain text for the name (no link).\n"
+                "- Do not use <strong> around the recipe name when a URL is available; the name must be inside the <a> only.\n"
                 "- Do not use markdown.\n"
                 "- Do not use asterisks.\n"
                 "- Do not use quotation marks unless truly needed.\n"
                 "- Do not invent recipes not present in the retrieved context.\n"
                 "- Do not mention recipes that were not retrieved.\n"
-                "- When mentioning a recipe, include its source URL if available.\n"
+                "- Do not add a Sources section, bibliography, or separate link list at the end.\n"
                 "- Keep the answer concise, clean, and readable.\n"
                 "Example output:\n"
                 "<p>I found several good chicken options for you, including light dishes and heartier casseroles.</p>"
                 "<p><strong>Simple and Light</strong></p>"
                 "<ul>"
-                "<li><strong>Poached Chicken:</strong> A clean, basic option if you want something minimal and straightforward.</li>"
-                "<li><strong>Chicken and Noodles:</strong> A simple comfort-food choice with a classic preparation.</li>"
-                "</ul>"
-                "<p><strong>Comforting Casseroles</strong></p>"
-                "<ul>"
-                "<li><strong>Chicken Casserole:</strong> A filling option if you want something hearty and rich.</li>"
+                '<li><a href="https://example.com/poached" target="_blank" rel="noopener noreferrer">Poached Chicken</a>: '
+                "A clean, basic option if you want something minimal and straightforward.</li>"
+                '<li><a href="https://example.com/noodles" target="_blank" rel="noopener noreferrer">Chicken and Noodles</a>: '
+                "A simple comfort-food choice with a classic preparation.</li>"
                 "</ul>"
             ),
         },
@@ -975,7 +1028,9 @@ def mealmap_chat():
         refined_query=refined_query,
         recipes=payload,
     )
-    sources = build_recipe_sources(payload)
+    llm_answer = strip_trailing_sources_block(
+        linkify_recipe_names_in_answer(llm_answer, payload)
+    )
 
     return jsonify(
         {
@@ -985,7 +1040,6 @@ def mealmap_chat():
             "profile_used": refined_profile,
             "model_used": refined_model,
             "matches": payload,
-            "sources": sources,
             "answer": llm_answer,
         }
     )
