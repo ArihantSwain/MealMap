@@ -76,6 +76,25 @@ EXCLUDE_PATTERNS = [
     re.compile(r"\bno\s+((?:[\w-]+\s+){0,2}[\w-]+)\b", re.I),
 ]
 
+AXIS_STOPWORDS = {
+    "recipe", "recipes", "dish", "dishes", "food", "foods", "meal", "meals",
+    "make", "made", "using", "with", "without", "cup", "cups", "tablespoon",
+    "tablespoons", "teaspoon", "teaspoons", "tbsp", "tsp", "oz", "ounce",
+    "ounces", "fresh", "large", "small", "medium", "mix", "mixed", "style",
+}
+
+AXIS_THEME_RULES = [
+    ("savory", {"garlic", "onion", "pepper", "salt", "broth", "stock", "herb", "spice"}),
+    ("sweet", {"sugar", "honey", "maple", "cinnamon", "vanilla", "chocolate", "dessert"}),
+    ("protein", {"chicken", "beef", "pork", "turkey", "tofu", "egg", "salmon", "shrimp", "beans"}),
+    ("dairy", {"cheese", "milk", "cream", "butter", "yogurt", "mozzarella", "parmesan"}),
+    ("veggie", {"spinach", "broccoli", "carrot", "tomato", "pepper", "onion", "kale", "zucchini"}),
+    ("fresh", {"lemon", "lime", "basil", "parsley", "cilantro", "mint", "ginger"}),
+    ("grain", {"rice", "pasta", "noodle", "bread", "flour", "oats", "quinoa", "tortilla"}),
+    ("spicy", {"chili", "jalapeno", "cayenne", "paprika", "sriracha", "hot"}),
+    ("comfort", {"casserole", "bake", "creamy", "stew", "soup", "gravy", "fried"}),
+]
+
 
 def parse_query_exclusions(raw):
     text = str(raw or "").strip()
@@ -425,6 +444,44 @@ def svd_axis_terms_for_dim(dim_k, top_n=2):
     return " · ".join(picked) if picked else f"topic {dim_k}"
 
 
+def svd_axis_word_for_dim(dim_k):
+    names = np.array(TFIDF_VECTORIZER.get_feature_names_out())
+    comp = SVD_MODEL.components_[int(dim_k)]
+    top_idx = np.argsort(np.abs(comp))[-64:][::-1]
+
+    def normalize_word(token):
+        token = re.sub(r"[^a-z]", "", str(token).lower())
+        if len(token) < 3 or token in AXIS_STOPWORDS:
+            return ""
+        return token
+
+    ranked_words = []
+    seen = set()
+    for rank, i in enumerate(top_idx[:24]):
+        term = str(names[int(i)]).strip().lower()
+        candidates = [term] if " " not in term else term.split()
+        for cand in candidates:
+            word = normalize_word(cand)
+            if not word or word in seen:
+                continue
+            seen.add(word)
+            # Earlier terms have larger absolute SVD loading; keep that priority.
+            ranked_words.append((word, max(1, 24 - rank)))
+
+    if ranked_words:
+        scores = []
+        for label, keys in AXIS_THEME_RULES:
+            score = sum(weight for word, weight in ranked_words if word in keys)
+            scores.append((score, label))
+        scores.sort(reverse=True)
+        if scores and scores[0][0] >= 6:
+            return scores[0][1]
+
+    for word, _ in ranked_words:
+        return word
+    return f"topic{int(dim_k)}"
+
+
 def build_svd_explain_payload(query_raw, recipe_title=None):
     ensure_models_loaded()
     base = {
@@ -464,7 +521,8 @@ def build_svd_explain_payload(query_raw, recipe_title=None):
         else:
             dim_indices = list(np.argsort(-np.abs(contrib))[:n_show])
 
-    axes = [svd_axis_terms_for_dim(k) for k in dim_indices]
+    axes = [svd_axis_word_for_dim(k) for k in dim_indices]
+    axis_definitions = [svd_axis_terms_for_dim(k, top_n=4) for k in dim_indices]
     q_sel = np.abs(q[dim_indices])
     max_q = max(float(q_sel.max()) if q_sel.size else 0.0, 1e-9)
     query_strength = np.round(q_sel / max_q, 4).tolist()
@@ -484,13 +542,18 @@ def build_svd_explain_payload(query_raw, recipe_title=None):
     lead = ", ".join(axes[:3]) if axes else ""
     if r is None:
         explanation = (
-            f"Your retrieval text most strongly activates these compressed topics: {lead}. "
-            "Each label is built from the highest-weight vocabulary terms on that SVD axis (TF‑IDF on titles, ingredients, and entities). "
-            "Higher spikes mean more of your wording aligns with that latent direction."
+            f"Your retrieval text most strongly activates these latent themes: {lead}. "
+            "Each axis label is a one-word summary of a hidden SVD direction, and the short definition lists its strongest terms. "
+            "Higher spikes mean your query language aligns more with that theme."
         )
     else:
+        similarity_bucket = (
+            "highly aligned" if cosine_sim >= 0.45
+            else "moderately aligned" if cosine_sim >= 0.25
+            else "weakly aligned"
+        )
         explanation = (
-            f"Similarity is driven most by overlap on: {lead}. "
+            f"This recipe is {similarity_bucket} with your query, driven most by overlap on: {lead}. "
             f"The chart highlights dimensions where your query and this recipe point the same way in topic space "
             f"(cosine similarity in normalized SVD space is about {cosine_sim:.2f}). "
             "Ranking also blends a lexical overlap bonus with the raw retrieval score."
@@ -502,6 +565,7 @@ def build_svd_explain_payload(query_raw, recipe_title=None):
         {
             "available": True,
             "axes": axes,
+            "axis_definitions": axis_definitions,
             "dimension_indices": [int(i) for i in dim_indices],
             "query_strength": query_strength,
             "recipe_strength": recipe_strength,

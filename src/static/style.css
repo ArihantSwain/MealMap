@@ -527,8 +527,9 @@ select {
 .radar-mount,
 .card-radar-mount {
   width: 100%;
-  max-width: 260px;
-  min-height: 200px;
+  max-width: 360px;
+  min-height: 280px;
+  margin: 0 auto;
 }
 
 .radar-mount svg,
@@ -536,6 +537,19 @@ select {
   width: 100%;
   height: auto;
   display: block;
+  overflow: visible;
+}
+
+.axis-def-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #57534e;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.axis-def-list li + li {
+  margin-top: 3px;
 }
 
 .qb-explain {

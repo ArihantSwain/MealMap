@@ -28,6 +28,7 @@ const showListingDropdown = document.getElementById("showListingDropdown");
 const queryBreakdownBody = document.getElementById("queryBreakdownBody");
 const queryBreakdownEmpty = document.getElementById("queryBreakdownEmpty");
 const queryRadarMount = document.getElementById("queryRadarMount");
+const queryDimsList = document.getElementById("queryDimsList");
 const queryBreakdownExplain = document.getElementById("queryBreakdownExplain");
 const queryBreakdownBadge = document.getElementById("queryBreakdownBadge");
 
@@ -107,10 +108,10 @@ function drawRadarChart(mountEl, labels, values, options = {}) {
     if (mountEl) mountEl.innerHTML = "";
     return;
   }
-  const vb = 304;
+  const vb = 420;
   const cx = vb / 2;
   const cy = vb / 2;
-  const maxR = 118;
+  const maxR = 128;
   const n = labels.length;
   const levels = [0.25, 0.5, 0.75, 1];
   const fill = options.fill ?? "rgba(22, 101, 52, 0.18)";
@@ -123,7 +124,7 @@ function drawRadarChart(mountEl, labels, values, options = {}) {
     return [cx + maxR * t * Math.cos(a), cy + maxR * t * Math.sin(a)];
   };
 
-  let g = `<defs><style>.radar-label{font-family:Raleway,system-ui,sans-serif;font-size:10px;font-weight:600;fill:#57534e}</style></defs>`;
+  let g = `<defs><style>.radar-label{font-family:Raleway,system-ui,sans-serif;font-size:16px;font-weight:700;fill:#44403c;text-transform:capitalize}</style></defs>`;
   for (const lev of levels) {
     const pts = [];
     for (let i = 0; i < n; i++) {
@@ -144,17 +145,38 @@ function drawRadarChart(mountEl, labels, values, options = {}) {
   }
   g += `<polygon fill="${fill}" stroke="${stroke}" stroke-width="1.6" points="${polyPts.join(" ")}"/>`;
 
-  const labelR = maxR + 36;
+  const labelR = maxR + 52;
   for (let i = 0; i < n; i++) {
     const a = angle(i);
     const lx = cx + labelR * Math.cos(a);
     const ly = cy + labelR * Math.sin(a);
     const raw = String(labels[i] || "");
-    const short = raw.length > 44 ? `${raw.slice(0, 41)}…` : raw;
+    const short = raw.length > 20 ? `${raw.slice(0, 17)}…` : raw;
     g += `<text class="radar-label" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle">${escapeHtml(short)}</text>`;
   }
 
-  mountEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vb} ${vb}" role="img" aria-label="Topic radar">${g}</svg>`;
+  mountEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vb} ${vb}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Topic radar">${g}</svg>`;
+}
+
+function titleCase(value) {
+  const t = String(value || "").trim();
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : "";
+}
+
+function renderAxisDefinitions(listEl, axes, defs) {
+  if (!listEl) return;
+  const labels = Array.isArray(axes) ? axes : [];
+  const definitions = Array.isArray(defs) ? defs : [];
+  if (!labels.length) {
+    listEl.innerHTML = "";
+    return;
+  }
+  listEl.innerHTML = labels
+    .map((label, idx) => {
+      const definition = definitions[idx] || label;
+      return `<li><strong>${escapeHtml(titleCase(label))}</strong> - ${escapeHtml(definition)}</li>`;
+    })
+    .join("");
 }
 
 function resetQueryBreakdownToEmpty() {
@@ -163,6 +185,7 @@ function resetQueryBreakdownToEmpty() {
   queryBreakdownEmpty.classList.remove("hidden");
   queryBreakdownEmpty.textContent = "Run a search to see which terms influenced the ranking!";
   queryRadarMount.innerHTML = "";
+  if (queryDimsList) queryDimsList.innerHTML = "";
   if (queryBreakdownExplain) queryBreakdownExplain.textContent = "";
   if (queryBreakdownBadge) queryBreakdownBadge.textContent = "—";
 }
@@ -196,6 +219,7 @@ async function updateQueryBreakdownPanel(queryText) {
       fill: currentModel === "svd" ? "rgba(22, 101, 52, 0.2)" : "rgba(100, 116, 139, 0.16)",
       stroke: currentModel === "svd" ? "#15803d" : "#64748b",
     });
+    renderAxisDefinitions(queryDimsList, data.axes, data.axis_definitions);
     const note =
       currentModel === "svd"
         ? ""
@@ -211,6 +235,7 @@ async function updateQueryBreakdownPanel(queryText) {
 async function loadCardWhyExplain(card, recipe) {
   const explainEl = card.querySelector(".why-explain");
   const mount = card.querySelector(".card-radar-mount");
+  const axisList = card.querySelector(".why-axis-list");
   if (!explainEl || !mount) return;
   const title = recipe?.title || "";
   const q =
@@ -239,6 +264,7 @@ async function loadCardWhyExplain(card, recipe) {
       fill: "rgba(22, 101, 52, 0.22)",
       stroke: "#15803d",
     });
+    renderAxisDefinitions(axisList, data.axes, data.axis_definitions);
     explainEl.textContent = data.explanation || "";
   } catch {
     explainEl.textContent = "Could not load explanation.";
@@ -377,6 +403,7 @@ function recipeCard(recipe, index) {
           <div class="card-radar-wrap">
             <div class="card-radar-mount" aria-label="Recipe topic radar"></div>
           </div>
+          <ul class="axis-def-list why-axis-list"></ul>
           <p class="why-explain"></p>
         </div>
       </div>
