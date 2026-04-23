@@ -944,11 +944,7 @@ def mealmap_svd_explain():
     title = request.args.get("title", "").strip()
     try:
         payload = build_svd_explain_payload(query, recipe_title=title or None)
-<<<<<<< HEAD
-        return jsonify(payload)
-=======
         return jsonify(to_json_safe(payload))
->>>>>>> 9014191 (Patched SVD graph for deployment)
     except Exception as exc:
         logger.exception("SVD explain failed: %s", exc)
         return jsonify(
