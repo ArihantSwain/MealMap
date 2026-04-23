@@ -8,6 +8,9 @@ let autocompleteTimer = null;
 let selectedRecipeTitle = "";
 let lastUserQuery = "";
 let retrievalExplainQuery = "";
+let uiBusyCount = 0;
+let ragRequestToken = 0;
+let recommendRequestToken = 0;
 
 // tracks titles currently in the meal plan
 let planTitles = new Set();
@@ -28,7 +31,6 @@ const showListingDropdown = document.getElementById("showListingDropdown");
 const queryBreakdownBody = document.getElementById("queryBreakdownBody");
 const queryBreakdownEmpty = document.getElementById("queryBreakdownEmpty");
 const queryRadarMount = document.getElementById("queryRadarMount");
-const queryDimsList = document.getElementById("queryDimsList");
 const queryBreakdownExplain = document.getElementById("queryBreakdownExplain");
 const queryBreakdownBadge = document.getElementById("queryBreakdownBadge");
 
@@ -73,10 +75,18 @@ function displayValue(value, suffix = "") {
 
 function niceDietLabel(diet) {
   if (!diet) return "None";
-  return diet
-    .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(" ");
+  const parts = String(diet)
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean);
+  return parts
+    .map((piece) =>
+      piece
+        .split("_")
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" ")
+    )
+    .join(", ");
 }
 
 function niceModelLabel(model) {
@@ -86,12 +96,46 @@ function niceModelLabel(model) {
 function recipeSourceUrl(recipe) {
   const raw = String(recipe?.link || recipe?.source || recipe?.site || "").trim();
   if (!raw) return "";
-  if (/^https?:\/\//i.test(raw)) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw.replace(/^https?:\/\/www\./i, (m) => (m.toLowerCase().startsWith("https") ? "https://" : "http://"));
   return `https://${raw.replace(/^www\./i, "")}`;
+}
+
+function normalizeExternalUrl(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  if (/^https?:\/\//i.test(text)) {
+    return text.replace(/^https?:\/\/www\./i, (m) => (m.toLowerCase().startsWith("https") ? "https://" : "http://"));
+  }
+  if (/^\/\//.test(text)) return `https:${text}`.replace(/^https:\/\/www\./i, "https://");
+  if (/^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(text)) return `https://${text.replace(/^www\./i, "")}`;
+  return "";
 }
 
 function syncModelFromUI() {
   currentModel = (modelSelect && modelSelect.value) || defaultMealmapModel;
+}
+
+function setUiBusy(isBusy) {
+  const disabled = Boolean(isBusy);
+  if (searchButton) searchButton.disabled = disabled;
+  if (clearFiltersButton) clearFiltersButton.disabled = disabled;
+  filterButtons.forEach((btn) => {
+    btn.disabled = disabled;
+  });
+}
+
+function beginBusy() {
+  uiBusyCount += 1;
+  setUiBusy(true);
+}
+
+function endBusy() {
+  uiBusyCount = Math.max(0, uiBusyCount - 1);
+  if (uiBusyCount === 0) setUiBusy(false);
+}
+
+function getActiveProfiles() {
+  return currentDiet ? [currentDiet] : [];
 }
 
 function normalizeList(value) {
@@ -159,36 +203,12 @@ function drawRadarChart(mountEl, labels, values, options = {}) {
   mountEl.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${vb} ${vb}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Topic radar">${g}</svg>`;
 }
 
-function titleCase(value) {
-  const t = String(value || "").trim();
-  return t ? t.charAt(0).toUpperCase() + t.slice(1) : "";
-}
-
-function renderAxisDefinitions(listEl, axes, defs, maxItems = null) {
-  if (!listEl) return;
-  const labels = Array.isArray(axes) ? axes : [];
-  const definitions = Array.isArray(defs) ? defs : [];
-  const limit = maxItems == null ? labels.length : Math.max(0, Number(maxItems) || 0);
-  const displayLabels = limit ? labels.slice(0, limit) : labels;
-  if (!displayLabels.length) {
-    listEl.innerHTML = "";
-    return;
-  }
-  listEl.innerHTML = displayLabels
-    .map((label, idx) => {
-      const definition = definitions[idx] || label;
-      return `<li><strong>${escapeHtml(titleCase(label))}</strong> - ${escapeHtml(definition)}</li>`;
-    })
-    .join("");
-}
-
 function resetQueryBreakdownToEmpty() {
   if (!queryBreakdownBody || !queryBreakdownEmpty || !queryRadarMount) return;
   queryBreakdownBody.classList.add("hidden");
   queryBreakdownEmpty.classList.remove("hidden");
   queryBreakdownEmpty.textContent = "Run a search to see which terms influenced the ranking!";
   queryRadarMount.innerHTML = "";
-  if (queryDimsList) queryDimsList.innerHTML = "";
   if (queryBreakdownExplain) queryBreakdownExplain.textContent = "";
   if (queryBreakdownBadge) queryBreakdownBadge.textContent = "—";
 }
@@ -225,7 +245,6 @@ async function updateQueryBreakdownPanel(queryText) {
       labelOffset: 50,
       labelFontSize: 14,
     });
-    renderAxisDefinitions(queryDimsList, data.axes, data.axis_definitions);
     const note =
       currentModel === "svd"
         ? ""
@@ -241,7 +260,6 @@ async function updateQueryBreakdownPanel(queryText) {
 async function loadCardWhyExplain(card, recipe) {
   const explainEl = card.querySelector(".why-explain");
   const mount = card.querySelector(".card-radar-mount");
-  const axisList = card.querySelector(".why-axis-list");
   if (!explainEl || !mount) return;
   const title = recipe?.title || "";
   const q =
@@ -273,7 +291,6 @@ async function loadCardWhyExplain(card, recipe) {
       labelOffset: 34,
       labelFontSize: 12,
     });
-    renderAxisDefinitions(axisList, data.axes, data.axis_definitions, 3);
     const cos = Number(data.cosine_similarity);
     const simPct = Number.isFinite(cos) ? Math.max(0, Math.min(100, Math.round(cos * 100))) : null;
     const simLine = simPct == null ? "" : `Estimated topic similarity: ${simPct}%. `;
@@ -288,7 +305,7 @@ async function loadCardWhyExplain(card, recipe) {
 function updateActiveState() {
   const pieces = [];
   if (selectedFood) pieces.push({ text: selectedFood, highlight: true });
-  if (currentDiet) pieces.push({ text: niceDietLabel(currentDiet), highlight: false });
+  getActiveProfiles().forEach((diet) => pieces.push({ text: niceDietLabel(diet), highlight: false }));
   activeState.innerHTML = pieces
     .map(({ text, highlight }) =>
       `<span class="state-pill${highlight ? " highlight" : ""}">${escapeHtml(text)}</span>`
@@ -372,6 +389,13 @@ function renderRagAnswer(data) {
   }
 
   llmAnswerText.innerHTML = data.answer;
+  llmAnswerText.querySelectorAll("a").forEach((a) => {
+    const normalized = normalizeExternalUrl(a.getAttribute("href") || a.textContent || "");
+    if (!normalized) return;
+    a.setAttribute("href", normalized);
+    a.setAttribute("target", "_blank");
+    a.setAttribute("rel", "noopener noreferrer");
+  });
   ragMeta.innerHTML = `
     <span class="badge">Original: ${escapeHtml(data.original_query || "")}</span>
     <span class="badge">Refined: ${escapeHtml(data.refined_query || "")}</span>
@@ -416,7 +440,6 @@ function recipeCard(recipe, index) {
           <div class="card-radar-wrap">
             <div class="card-radar-mount" aria-label="Recipe topic radar"></div>
           </div>
-          <ul class="axis-def-list why-axis-list"></ul>
         </div>
       </div>
     </article>
@@ -702,11 +725,18 @@ async function fetchRagAnswer(query) {
     setStatus("Type a dish before searching.", true);
     return;
   }
+  const requestToken = ++ragRequestToken;
+  beginBusy();
 
+  llmAnswerPanel.hidden = true;
+  llmAnswerText.innerHTML = "";
+  ragMeta.innerHTML = "";
+  recipesGrid.innerHTML = "";
   setStatus("Refining query and retrieving recipes...");
   syncModelFromUI();
 
   try {
+    const profile = getActiveProfiles()[0] || "none";
     const response = await fetch("/mealmap/chat", {
       method: "POST",
       headers: {
@@ -714,12 +744,13 @@ async function fetchRagAnswer(query) {
       },
       body: JSON.stringify({
         message: cleanQuery,
-        profile: currentDiet || "none",
+        profile,
         model: currentModel
       })
     });
 
     const data = await response.json();
+    if (requestToken !== ragRequestToken) return;
 
     if (!response.ok) {
       setStatus(data.error || "Could not load RAG response.", true);
@@ -743,9 +774,12 @@ async function fetchRagAnswer(query) {
     hideMatchDropdown();
     setStatus(`Showing retrieved recipes for refined query: ${data.refined_query}`);
   } catch (error) {
+    if (requestToken !== ragRequestToken) return;
     console.error(error);
     setStatus("Could not load RAG response.", true);
     updateResultsTitle();
+  } finally {
+    endBusy();
   }
 }
 
@@ -763,10 +797,11 @@ async function fetchMatchSuggestions(query) {
   }
 
   syncModelFromUI();
+  const profile = getActiveProfiles()[0] || "none";
 
   try {
     const response = await fetch(
-      `/mealmap/matches?query=${encodeURIComponent(cleanQuery)}&profile=${encodeURIComponent(currentDiet || "none")}&model=${encodeURIComponent(currentModel)}`
+      `/mealmap/matches?query=${encodeURIComponent(cleanQuery)}&profile=${encodeURIComponent(profile)}&model=${encodeURIComponent(currentModel)}`
     );
     const data = await response.json();
     renderMatchDropdown(data.matches || []);
@@ -777,6 +812,8 @@ async function fetchMatchSuggestions(query) {
 }
 
 async function fetchRecommendations(selected) {
+  const requestToken = ++recommendRequestToken;
+  beginBusy();
   selectedRecipeTitle = selected;
   selectedFood = selected;
   llmAnswerPanel.hidden = true;
@@ -789,17 +826,22 @@ async function fetchRecommendations(selected) {
   setStatus(`Loading recipes with ${niceModelLabel(currentModel)}...`);
 
   try {
+    const profile = getActiveProfiles()[0] || "none";
     const response = await fetch(
-      `/mealmap/recommend?selected=${encodeURIComponent(selected)}&profile=${encodeURIComponent(currentDiet || "none")}&model=${encodeURIComponent(currentModel)}&filter_query=${encodeURIComponent(lastUserQuery)}`
+      `/mealmap/recommend?selected=${encodeURIComponent(selected)}&profile=${encodeURIComponent(profile)}&model=${encodeURIComponent(currentModel)}&filter_query=${encodeURIComponent(lastUserQuery)}`
     );
     const data = await response.json();
+    if (requestToken !== recommendRequestToken) return;
     hideMatchDropdown();
     retrievalExplainQuery = (lastUserQuery && lastUserQuery.trim()) || selected || "";
     renderRecipes(data.recipes || []);
     void updateQueryBreakdownPanel(retrievalExplainQuery);
   } catch (error) {
+    if (requestToken !== recommendRequestToken) return;
     console.error(error);
     setStatus("Could not load recipes.", true);
+  } finally {
+    endBusy();
   }
 }
 
@@ -896,8 +938,9 @@ if (modelSelect) {
 
 filterButtons.forEach((button) => {
   button.addEventListener("click", () => {
+    if (uiBusyCount > 0) return;
     const clickedDiet = button.dataset.diet;
-
+    if (!clickedDiet) return;
     if (currentDiet === clickedDiet) {
       currentDiet = "";
       button.classList.remove("active");
@@ -911,6 +954,9 @@ filterButtons.forEach((button) => {
 
     if (selectedRecipeTitle) {
       fetchRecommendations(selectedRecipeTitle);
+    } else if (lastUserQuery.trim()) {
+      resultsTitle.textContent = "Thinking...";
+      fetchRagAnswer(lastUserQuery);
     } else {
       const query = searchInput.value.trim();
       if (query) fetchMatchSuggestions(query);
@@ -919,12 +965,16 @@ filterButtons.forEach((button) => {
 });
 
 clearFiltersButton.addEventListener("click", () => {
+  if (uiBusyCount > 0) return;
   currentDiet = "";
   filterButtons.forEach((btn) => btn.classList.remove("active"));
   updateActiveState();
 
   if (selectedRecipeTitle) {
     fetchRecommendations(selectedRecipeTitle);
+  } else if (lastUserQuery.trim()) {
+    resultsTitle.textContent = "Thinking...";
+    fetchRagAnswer(lastUserQuery);
   } else {
     const query = searchInput.value.trim();
     if (query) fetchMatchSuggestions(query);

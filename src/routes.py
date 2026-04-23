@@ -27,6 +27,10 @@ SEARCH_LIMIT = 12
 RECOMMEND_LIMIT = 24
 DEFAULT_MODEL = "tfidf"
 SVD_RADAR_DIMS = 6
+VALID_PROFILES = {
+    "high_protein", "low_carb", "keto", "low_calorie",
+    "low_fat", "low_sodium", "balanced", "bodybuilding",
+}
 
 DF = None
 
@@ -291,7 +295,6 @@ def add_final_columns(df):
 def load_data():
     data_path = DATA_PATH
     df = pd.read_csv(data_path).fillna("")
-
     expected = ["title", "ingredients", "directions", "link", "source", "site", "NER"]
     for col in expected:
         if col not in df.columns:
@@ -309,7 +312,7 @@ def load_data():
     df["normalized_ingredients"] = df["ingredients"].map(normalize_text)
     df["normalized_ner"] = df["NER"].map(normalize_text)
 
-    df = df.drop_duplicates(subset=["normalized_title", "normalized_ingredients"]).reset_index(drop=True)
+    df = df.drop_duplicates(subset=["normalized_title"]).reset_index(drop=True)
     df = add_final_columns(df)
 
     df["document_text"] = (
@@ -465,7 +468,6 @@ def svd_axis_word_for_dim(dim_k):
             if not word or word in seen:
                 continue
             seen.add(word)
-            # Earlier terms have larger absolute SVD loading; keep that priority.
             ranked_words.append((word, max(1, 24 - rank)))
 
     if ranked_words:
@@ -480,6 +482,35 @@ def svd_axis_word_for_dim(dim_k):
     for word, _ in ranked_words:
         return word
     return f"topic{int(dim_k)}"
+
+
+def make_unique_axis_labels(base_labels, axis_definitions):
+    unique = []
+    seen = set()
+    for idx, label in enumerate(base_labels):
+        raw = str(label or "").strip().lower() or f"topic{idx + 1}"
+        if raw not in seen:
+            unique.append(raw)
+            seen.add(raw)
+            continue
+
+        definition = str(axis_definitions[idx] if idx < len(axis_definitions) else "").lower()
+        candidates = [t for t in re.split(r"[^a-z]+", definition) if len(t) >= 3 and t not in AXIS_STOPWORDS]
+        chosen = ""
+        for cand in candidates:
+            if cand not in seen:
+                chosen = cand
+                break
+
+        if not chosen:
+            n = 2
+            while f"{raw}{n}" in seen:
+                n += 1
+            chosen = f"{raw}{n}"
+
+        unique.append(chosen)
+        seen.add(chosen)
+    return unique
 
 
 def build_svd_explain_payload(query_raw, recipe_title=None):
@@ -523,6 +554,7 @@ def build_svd_explain_payload(query_raw, recipe_title=None):
 
     axes = [svd_axis_word_for_dim(k) for k in dim_indices]
     axis_definitions = [svd_axis_terms_for_dim(k, top_n=4) for k in dim_indices]
+    axes = make_unique_axis_labels(axes, axis_definitions)
     q_sel = np.abs(q[dim_indices])
     max_q = max(float(q_sel.max()) if q_sel.size else 0.0, 1e-9)
     query_strength = np.round(q_sel / max_q, 4).tolist()
@@ -702,6 +734,70 @@ def profile_sort(df, profile):
     return df.sort_values(["similarity_score", "nutrition_available", "title"], ascending=[False, False, True])
 
 
+def parse_profiles_arg(raw_profiles, fallback_profile="none"):
+    profiles = []
+    if isinstance(raw_profiles, list):
+        pieces = raw_profiles
+    else:
+        text = str(raw_profiles or "").strip()
+        pieces = [p.strip() for p in text.split(",")] if text else []
+    for p in pieces:
+        key = str(p or "").strip().lower()
+        if key in VALID_PROFILES and key not in profiles:
+            profiles.append(key)
+
+    fallback = str(fallback_profile or "").strip().lower()
+    if not profiles and fallback in VALID_PROFILES:
+        profiles = [fallback]
+    return profiles
+
+
+def profile_score_series(df, profile):
+    if profile == "low_calorie":
+        base = -pd.to_numeric(df["_cal"], errors="coerce")
+    elif profile == "high_protein":
+        base = pd.to_numeric(df["_protein"], errors="coerce")
+    elif profile == "bodybuilding":
+        base = pd.to_numeric(df["_bodybuilding_score"], errors="coerce")
+    elif profile == "low_carb":
+        base = -pd.to_numeric(df["_carbs"], errors="coerce")
+    elif profile == "low_fat":
+        base = -pd.to_numeric(df["_fat"], errors="coerce")
+    elif profile == "low_sodium":
+        base = -pd.to_numeric(df["_sodium"], errors="coerce")
+    elif profile == "keto":
+        base = pd.to_numeric(df["_keto_score"], errors="coerce")
+    elif profile == "balanced":
+        base = pd.to_numeric(df["_balanced_score"], errors="coerce")
+    else:
+        return pd.Series(0.0, index=df.index)
+
+    if base.isna().all():
+        return pd.Series(0.0, index=df.index)
+    return base.fillna(base.median())
+
+
+def profile_sort_multi(df, profiles):
+    cleaned = [p for p in (profiles or []) if p in VALID_PROFILES]
+    if not cleaned:
+        return profile_sort(df, "none")
+    if len(cleaned) == 1:
+        return profile_sort(df, cleaned[0])
+
+    ranked = df.copy()
+    rank_cols = []
+    for profile in cleaned:
+        score = profile_score_series(ranked, profile)
+        col = f"_rank_{profile}"
+        ranked[col] = score.rank(method="average", pct=True)
+        rank_cols.append(col)
+    ranked["_multi_profile_score"] = ranked[rank_cols].mean(axis=1)
+    return ranked.sort_values(
+        ["nutrition_available", "_multi_profile_score", "similarity_score"],
+        ascending=[False, False, False],
+    )
+
+
 def build_payload(row, profile=""):
     ingredients = parse_listish(row.get("ingredients", ""))
     directions = parse_listish(row.get("directions", ""))
@@ -813,17 +909,7 @@ def llm_refine_mealmap_query(client, user_message, current_profile="none", curre
     model = str(data.get("model", current_model)).strip().lower() or current_model
     reason = str(data.get("reason", "")).strip() or "Used LLM to refine the query."
 
-    valid_profiles = {
-        "none",
-        "high_protein",
-        "low_carb",
-        "keto",
-        "low_calorie",
-        "low_fat",
-        "low_sodium",
-        "balanced",
-        "bodybuilding",
-    }
+    valid_profiles = {"none", *VALID_PROFILES}
 
     if profile not in valid_profiles:
         profile = current_profile
@@ -867,13 +953,14 @@ def recipe_public_url(recipe):
     if not raw:
         return ""
     if raw.startswith(("http://", "https://")):
-        return raw
+        return re.sub(r"^(https?://)www\.", r"\1", raw, flags=re.I)
     if raw.startswith("//"):
-        return f"https:{raw}"
+        return re.sub(r"^https://www\.", "https://", f"https:{raw}", flags=re.I)
     if raw.startswith("/"):
         return ""
     if re.match(r"^[a-z0-9.-]+\.[a-z]{2,}(/.*)?$", raw, re.I):
-        return f"https://{raw}"
+        cleaned = re.sub(r"^www\.", "", raw, flags=re.I)
+        return f"https://{cleaned}"
     return ""
 
 
@@ -982,8 +1069,35 @@ def llm_answer_with_recipes(client, user_message, refined_query, recipes):
         },
     ]
 
-    response = client.chat(messages)
-    return (response.get("content") or "").strip()
+    try:
+        response = client.chat(messages)
+        return (response.get("content") or "").strip()
+    except Exception as e:
+        logger.warning("Answer LLM call failed: %s", e)
+        top = recipes[:3]
+        if not top:
+            return (
+                "<p>The explanation service is temporarily unavailable. "
+                "Please try again in a moment.</p>"
+            )
+        items = []
+        for recipe in top:
+            title = html.escape(str(recipe.get("title") or "Recipe"))
+            url = recipe_public_url(recipe)
+            if url:
+                safe_url = html.escape(url, quote=True)
+                head = f'<a href="{safe_url}" target="_blank" rel="noopener noreferrer">{title}</a>'
+            else:
+                head = title
+            cal = html.escape(str(recipe.get("calories") or "N/A"))
+            protein = html.escape(str(recipe.get("protein_g") or "N/A"))
+            items.append(
+                f"<li>{head}: Calories {cal}, Protein {protein}g.</li>"
+            )
+        return (
+            "<p>The LLM is rate-limited right now, so here are top retrieved recipes from your query.</p>"
+            f"<ul>{''.join(items)}</ul>"
+        )
 
 
 @bp.get("/mealmap/meta")
@@ -1040,6 +1154,8 @@ def matches():
 
     if model_name not in {"tfidf", "svd"}:
         model_name = DEFAULT_MODEL
+    if profile not in {"none", *VALID_PROFILES}:
+        profile = "none"
 
     if not query:
         return jsonify({"matches": []})
@@ -1062,6 +1178,8 @@ def recommend():
 
     if model_name not in {"tfidf", "svd"}:
         model_name = DEFAULT_MODEL
+    if profile not in {"none", *VALID_PROFILES}:
+        profile = "none"
 
     if not selected:
         return jsonify({"recipes": []})
@@ -1092,10 +1210,7 @@ def mealmap_chat():
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
 
-    if profile not in {
-        "none", "high_protein", "low_carb", "keto", "low_calorie",
-        "low_fat", "low_sodium", "balanced", "bodybuilding"
-    }:
+    if profile not in {"none", *VALID_PROFILES}:
         profile = "none"
 
     if model_name not in {"tfidf", "svd"}:
@@ -1115,12 +1230,11 @@ def mealmap_chat():
     )
 
     refined_query = refinement["refined_query"]
-    refined_profile = refinement["profile"]
     refined_model = refinement["model"]
 
     candidates = retrieve_candidates(refined_query, model_name=refined_model, top_k=200)
-    ranked = profile_sort(candidates, refined_profile).head(SEARCH_LIMIT)
-    payload = [build_payload(row, refined_profile) for _, row in ranked.iterrows()]
+    ranked = profile_sort(candidates, profile).head(SEARCH_LIMIT)
+    payload = [build_payload(row, profile) for _, row in ranked.iterrows()]
 
     llm_answer = llm_answer_with_recipes(
         client,
@@ -1137,7 +1251,7 @@ def mealmap_chat():
             "original_query": user_message,
             "refined_query": refined_query,
             "refinement_reason": refinement["reason"],
-            "profile_used": refined_profile,
+            "profile_used": profile,
             "model_used": refined_model,
             "matches": payload,
             "answer": llm_answer,
@@ -1153,12 +1267,20 @@ def mealplan_add():
         return jsonify({"error": "Missing title"}), 400
 
     plan = session.get("meal_plan", [])
-    if any(r["title"] == title for r in plan):
+    incoming_ingredients = parse_listish(data.get("ingredients", []))
+
+    def plan_key(item):
+        t = normalize_text(item.get("title", ""))
+        ing = " ".join(parse_listish(item.get("ingredients", [])))
+        return f"{t}::{normalize_text(ing)}"
+
+    incoming_key = plan_key({"title": title, "ingredients": incoming_ingredients})
+    if any(plan_key(r) == incoming_key for r in plan):
         return jsonify({"plan": plan, "already_added": True})
 
     plan.append({
         "title": title,
-        "ingredients": data.get("ingredients", []),
+        "ingredients": incoming_ingredients,
         "servings": data.get("servings", ""),
     })
     session["meal_plan"] = plan
