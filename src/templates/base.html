@@ -42,7 +42,14 @@
             <div id="matchDropdown" class="match-dropdown hidden"></div>
           </div>
 
-          <div class="model-select-wrap">
+          <div class="model-toggle-row">
+            <label class="toggle-label">
+              <input id="showModelOptions" type="checkbox" />
+              Show search method choice
+            </label>
+          </div>
+
+          <div id="modelOptionsWrap" class="model-select-wrap hidden">
             <label class="section-label" for="modelSelect">Search method</label>
             <select id="modelSelect" class="model-select">
               <option value="tfidf">TF-IDF — keyword search</option>
@@ -67,7 +74,6 @@
             <button class="filter-btn" data-diet="low_sodium">Low Sodium</button>
             <button class="filter-btn" data-diet="balanced">Balanced</button>
             <button class="filter-btn" data-diet="bodybuilding">Bodybuilding</button>
-            <button class="filter-btn" data-diet="vegan">Vegan</button>
           </div>
         </div>
       </section>
@@ -76,7 +82,7 @@
         <div class="results-header">
           <div>
             <p class="section-label">Results</p>
-            <h2 id="resultsTitle">Search to get started</h2>
+            <h2 id="resultsTitle">Thinking...</h2>
           </div>
           <div id="activeState" class="active-state"></div>
         </div>
@@ -88,6 +94,7 @@
             <h3>LLM Response:</h3>
             <div id="llmAnswerText"></div>
             <div id="ragMeta" class="meta-row"></div>
+            <div id="ragSources" class="rag-sources"></div>
           </div>
         </section>
         <div id="recipesGrid" class="grid"></div>

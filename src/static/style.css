@@ -233,6 +233,28 @@ select {
   margin-bottom: 20px;
 }
 
+.model-toggle-row {
+  margin-bottom: 10px;
+}
+
+.toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.toggle-label input {
+  accent-color: var(--primary);
+}
+
+.hidden {
+  display: none !important;
+}
+
 .model-select {
   width: 100%;
   padding: 12px 15px;
@@ -611,6 +633,21 @@ select {
   padding: 14px 16px;
   color: var(--muted);
   font-size: 14px;
+}
+
+.rag-sources {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.rag-sources ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.rag-sources a {
+  color: var(--primary);
 }
 
 /* Responsive */

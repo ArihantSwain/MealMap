@@ -3,8 +3,10 @@ let currentRecipes = [];
 let currentMatches = [];
 let selectedFood = "";
 let currentModel = "tfidf";
+let defaultMealmapModel = "tfidf";
 let autocompleteTimer = null;
 let selectedRecipeTitle = "";
+let lastUserQuery = "";
 
 // tracks titles currently in the meal plan
 let planTitles = new Set();
@@ -19,11 +21,14 @@ const activeState = document.getElementById("activeState");
 const resultsTitle = document.getElementById("resultsTitle");
 const metaPills = document.getElementById("metaPills");
 const modelSelect = document.getElementById("modelSelect");
+const showModelOptions = document.getElementById("showModelOptions");
+const modelOptionsWrap = document.getElementById("modelOptionsWrap");
 const matchDropdown = document.getElementById("matchDropdown");
 
 const llmAnswerPanel = document.getElementById("llmAnswerPanel");
 const llmAnswerText = document.getElementById("llmAnswerText");
 const ragMeta = document.getElementById("ragMeta");
+const ragSources = document.getElementById("ragSources");
 
 const recipeModal = document.getElementById("recipeModal");
 const modalBackdrop = document.getElementById("modalBackdrop");
@@ -72,6 +77,28 @@ function niceModelLabel(model) {
   return model === "tfidf" ? "TF-IDF" : "SVD";
 }
 
+function recipeSourceUrl(recipe) {
+  const raw = String(recipe?.link || recipe?.source || recipe?.site || "").trim();
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `https://${raw.replace(/^www\./i, "")}`;
+}
+
+function syncModelFromUI() {
+  if (showModelOptions && showModelOptions.checked && modelSelect) {
+    currentModel = modelSelect.value || defaultMealmapModel;
+  } else {
+    currentModel = defaultMealmapModel;
+  }
+}
+
+function applyModelVisibility() {
+  if (!modelOptionsWrap || !showModelOptions || !modelSelect) return;
+  const enabled = showModelOptions.checked;
+  modelOptionsWrap.classList.toggle("hidden", !enabled);
+  modelSelect.disabled = !enabled;
+}
+
 function normalizeList(value) {
   if (!value) return [];
   if (Array.isArray(value)) return value.filter(Boolean);
@@ -96,7 +123,7 @@ function updateActiveState() {
 
 function updateResultsTitle(prefix = "Results") {
   if (!selectedFood) {
-    resultsTitle.textContent = "Search to get started";
+    resultsTitle.textContent = "Thinking...";
     return;
   }
   resultsTitle.textContent = `${prefix} for "${selectedFood}"`;
@@ -144,6 +171,7 @@ function renderMatchDropdown(matches) {
       const match = currentMatches[Number(button.dataset.index)];
       if (!match) return;
 
+      lastUserQuery = searchInput.value.trim();
       selectedRecipeTitle = match.title || "";
       selectedFood = selectedRecipeTitle;
       searchInput.value = selectedRecipeTitle;
@@ -160,6 +188,7 @@ function renderRagAnswer(data) {
     llmAnswerPanel.hidden = true;
     llmAnswerText.innerHTML = "";
     ragMeta.innerHTML = "";
+    if (ragSources) ragSources.innerHTML = "";
     return;
   }
 
@@ -170,6 +199,27 @@ function renderRagAnswer(data) {
     <span class="badge">${escapeHtml(niceModelLabel(data.model_used || currentModel))}</span>
     ${data.profile_used && data.profile_used !== "none" ? `<span class="badge">${escapeHtml(niceDietLabel(data.profile_used))}</span>` : ""}
   `;
+  if (ragSources) {
+    const sources = Array.isArray(data.sources) ? data.sources : [];
+    if (!sources.length) {
+      ragSources.innerHTML = "";
+    } else {
+      ragSources.innerHTML = `
+        <p><strong>Sources</strong></p>
+        <ul>
+          ${sources
+            .map((src) => {
+              const title = escapeHtml(src.title || "Recipe");
+              const url = String(src.url || "").trim();
+              if (!url) return `<li>${title}</li>`;
+              const href = /^https?:\/\//i.test(url) ? url : `https://${url.replace(/^www\./i, "")}`;
+              return `<li>${title} — <a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">source</a></li>`;
+            })
+            .join("")}
+        </ul>
+      `;
+    }
+  }
   llmAnswerPanel.hidden = false;
 }
 
@@ -475,8 +525,10 @@ async function fetchMeta() {
   try {
     const response = await fetch("/mealmap/meta");
     const data = await response.json();
-    currentModel = data.default_retrieval_model || "tfidf";
-    modelSelect.value = currentModel;
+    defaultMealmapModel = data.default_retrieval_model || "tfidf";
+    if (modelSelect) modelSelect.value = defaultMealmapModel;
+    syncModelFromUI();
+    applyModelVisibility();
     metaPills.innerHTML = `
       <span class="state-pill">${escapeHtml(data.dataset_size)} recipes</span>
       <span class="state-pill">${escapeHtml(data.nutrition_coverage)}% with nutrition data</span>
@@ -495,7 +547,7 @@ async function fetchRagAnswer(query) {
   }
 
   setStatus("Refining query and retrieving recipes...");
-  currentModel = modelSelect.value || "svd";
+  syncModelFromUI();
 
   try {
     const response = await fetch("/mealmap/chat", {
@@ -519,6 +571,7 @@ async function fetchRagAnswer(query) {
 
     selectedFood = data.refined_query || cleanQuery;
     selectedRecipeTitle = "";
+    lastUserQuery = cleanQuery;
     searchInput.value = selectedFood;
     currentModel = data.model_used || currentModel;
     modelSelect.value = currentModel;
@@ -543,7 +596,7 @@ async function fetchMatchSuggestions(query) {
     return;
   }
 
-  currentModel = modelSelect.value || "tfidf";
+  syncModelFromUI();
 
   try {
     const response = await fetch(
@@ -563,7 +616,8 @@ async function fetchRecommendations(selected) {
   llmAnswerPanel.hidden = true;
   llmAnswerText.textContent = "";
   ragMeta.innerHTML = "";
-  currentModel = modelSelect.value || "tfidf";
+  if (ragSources) ragSources.innerHTML = "";
+  syncModelFromUI();
   updateActiveState();
   updateResultsTitle("Recipes");
   recipesGrid.innerHTML = "";
@@ -571,7 +625,7 @@ async function fetchRecommendations(selected) {
 
   try {
     const response = await fetch(
-      `/mealmap/recommend?selected=${encodeURIComponent(selected)}&profile=${encodeURIComponent(currentDiet || "none")}&model=${encodeURIComponent(currentModel)}`
+      `/mealmap/recommend?selected=${encodeURIComponent(selected)}&profile=${encodeURIComponent(currentDiet || "none")}&model=${encodeURIComponent(currentModel)}&filter_query=${encodeURIComponent(lastUserQuery)}`
     );
     const data = await response.json();
     hideMatchDropdown();
@@ -591,6 +645,8 @@ searchButton.addEventListener("click", () => {
     return;
   }
 
+  resultsTitle.textContent = "Thinking...";
+  lastUserQuery = query;
   hideMatchDropdown();
   fetchRagAnswer(query);
 });
@@ -628,6 +684,8 @@ searchInput.addEventListener("keydown", (event) => {
       return;
     }
 
+    resultsTitle.textContent = "Thinking...";
+    lastUserQuery = query;
     hideMatchDropdown();
     fetchRagAnswer(query);
   }
@@ -637,18 +695,36 @@ searchInput.addEventListener("keydown", (event) => {
   }
 });
 
-modelSelect.addEventListener("change", () => {
-  currentModel = modelSelect.value || "tfidf";
-  updateActiveState();
+if (showModelOptions) {
+  showModelOptions.addEventListener("change", () => {
+    applyModelVisibility();
+    syncModelFromUI();
+    updateActiveState();
 
-  const query = searchInput.value.trim();
+    const query = searchInput.value.trim();
+    if (selectedRecipeTitle) {
+      fetchRecommendations(selectedRecipeTitle);
+    } else if (query) {
+      fetchMatchSuggestions(query);
+    }
+  });
+}
 
-  if (selectedRecipeTitle) {
-    fetchRecommendations(selectedRecipeTitle);
-  } else if (query) {
-    fetchMatchSuggestions(query);
-  }
-});
+if (modelSelect) {
+  modelSelect.addEventListener("change", () => {
+    if (showModelOptions && !showModelOptions.checked) return;
+    syncModelFromUI();
+    updateActiveState();
+
+    const query = searchInput.value.trim();
+
+    if (selectedRecipeTitle) {
+      fetchRecommendations(selectedRecipeTitle);
+    } else if (query) {
+      fetchMatchSuggestions(query);
+    }
+  });
+}
 
 filterButtons.forEach((button) => {
   button.addEventListener("click", () => {
@@ -724,6 +800,8 @@ fetch("/mealplan")
 llmAnswerPanel.hidden = true;
 llmAnswerText.innerHTML = "";
 ragMeta.innerHTML = "";
+if (ragSources) ragSources.innerHTML = "";
 
 fetchMeta();
+applyModelVisibility();
 updateActiveState();

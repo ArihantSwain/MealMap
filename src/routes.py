@@ -55,6 +55,56 @@ def tokenize(value):
     return set(normalize_text(value).split())
 
 
+EXCLUDE_PATTERNS = [
+    re.compile(r"\bwithout\s+((?:[\w-]+\s+){0,2}[\w-]+)\b", re.I),
+    re.compile(r"\bexclude\s+((?:[\w-]+\s+){0,2}[\w-]+)\b", re.I),
+    re.compile(r"\bno\s+((?:[\w-]+\s+){0,2}[\w-]+)\b", re.I),
+]
+
+
+def parse_query_exclusions(raw):
+    text = str(raw or "").strip()
+    exclusions = []
+    for _ in range(24):
+        matched = False
+        for pattern in EXCLUDE_PATTERNS:
+            hit = pattern.search(text)
+            if hit:
+                exclusions.append(normalize_text(hit.group(1)))
+                text = pattern.sub(" ", text, count=1)
+                matched = True
+                break
+        if not matched:
+            break
+    retrieval_text = normalize_text(re.sub(r"\s+", " ", text).strip())
+    unique = []
+    seen = set()
+    for phrase in exclusions:
+        if phrase and phrase not in seen:
+            seen.add(phrase)
+            unique.append(phrase)
+    return retrieval_text, unique
+
+
+def row_contains_exclusion(row, exclusion):
+    row_text = normalize_text(
+        f"{row.get('title', '')} {row.get('ingredients', '')} {row.get('NER', '')} "
+        f"{row.get('document_text', '')} {row.get('recommendation_text', '')}"
+    )
+    if not exclusion:
+        return False
+    if " " in exclusion:
+        return exclusion in row_text
+    return exclusion in tokenize(row_text)
+
+
+def apply_exclusion_filter(df, exclusions):
+    if df is None or df.empty or not exclusions:
+        return df
+    keep_mask = ~df.apply(lambda row: any(row_contains_exclusion(row, ex) for ex in exclusions), axis=1)
+    return df[keep_mask].copy()
+
+
 def parse_listish(value):
     if value is None:
         return []
@@ -201,13 +251,6 @@ def add_final_columns(df):
         - df["_cal"].fillna(0) / 260.0
     )
 
-    df["_vegan_score"] = (
-        df["_fiber"].fillna(0) * 2.0
-        + df["_carbs"].fillna(0) * 0.2
-        - df["_fat"].fillna(0) * 0.25
-        - df["_sodium"].fillna(0) / 1200.0
-    )
-
     return df
 
 
@@ -341,7 +384,7 @@ def lexical_overlap_bonus(query, row):
 def retrieve_candidates(query, model_name, top_k=250):
     ensure_models_loaded()
 
-    cleaned_query = normalize_text(query)
+    cleaned_query, exclusions = parse_query_exclusions(query)
     if not cleaned_query:
         return DF.iloc[0:0].copy()
 
@@ -379,6 +422,7 @@ def retrieve_candidates(query, model_name, top_k=250):
     else:
         filtered = filtered.head(top_k).copy()
 
+    filtered = apply_exclusion_filter(filtered, exclusions)
     return filtered
 
 def recommend_from_selected_recipe(selected_title, model_name, top_k=350):
@@ -457,8 +501,6 @@ def profile_sort(df, profile):
         return df.sort_values(["nutrition_available", "_keto_score", "similarity_score"], ascending=[False, False, False])
     if profile == "balanced":
         return df.sort_values(["nutrition_available", "_balanced_score", "similarity_score"], ascending=[False, False, False])
-    if profile == "vegan":
-        return df.sort_values(["nutrition_available", "_vegan_score", "similarity_score"], ascending=[False, False, False])
 
     return df.sort_values(["similarity_score", "nutrition_available", "title"], ascending=[False, False, True])
 
@@ -508,7 +550,7 @@ def llm_refine_mealmap_query(client, user_message, current_profile="none", curre
                 "- refined_query should be short, concrete, and optimized for retrieval.\n"
                 "- Keep the main dish, cuisine, ingredients, dietary goals, and meal type when relevant.\n"
                 "- Remove filler phrases like 'I want', 'can you find', 'something with'.\n"
-                "- profile must be one of: none, high_protein, low_carb, keto, low_calorie, low_fat, low_sodium, balanced, bodybuilding, vegan.\n"
+                "- profile must be one of: none, high_protein, low_carb, keto, low_calorie, low_fat, low_sodium, balanced, bodybuilding.\n"
                 "- model must be either tfidf or svd.\n"
                 "- reason should be one short sentence.\n"
                 "- If the user request is already a good search query, keep it close to the original.\n"
@@ -584,7 +626,6 @@ def llm_refine_mealmap_query(client, user_message, current_profile="none", curre
         "low_sodium",
         "balanced",
         "bodybuilding",
-        "vegan",
     }
 
     if profile not in valid_profiles:
@@ -611,6 +652,7 @@ def build_recipe_context(recipes):
 
         chunks.append(
             f"Title: {recipe.get('title', '')}\n"
+            f"Source: {recipe.get('link', '') or recipe.get('source', '') or recipe.get('site', '')}\n"
             f"Calories: {recipe.get('calories', 'N/A')}\n"
             f"Protein: {recipe.get('protein_g', 'N/A')} g\n"
             f"Carbs: {recipe.get('carbs_g', 'N/A')} g\n"
@@ -621,6 +663,18 @@ def build_recipe_context(recipes):
         )
 
     return "\n\n---\n\n".join(chunks)
+
+
+def build_recipe_sources(recipes):
+    sources = []
+    for recipe in recipes:
+        sources.append(
+            {
+                "title": recipe.get("title", ""),
+                "url": recipe.get("link", "") or recipe.get("source", "") or recipe.get("site", ""),
+            }
+        )
+    return sources
 
 def llm_answer_with_recipes(client, user_message, refined_query, recipes):
     context_text = build_recipe_context(recipes)
@@ -642,6 +696,7 @@ def llm_answer_with_recipes(client, user_message, refined_query, recipes):
                 "- Do not use quotation marks unless truly needed.\n"
                 "- Do not invent recipes not present in the retrieved context.\n"
                 "- Do not mention recipes that were not retrieved.\n"
+                "- When mentioning a recipe, include its source URL if available.\n"
                 "- Keep the answer concise, clean, and readable.\n"
                 "Example output:\n"
                 "<p>I found several good chicken options for you, including light dishes and heartier casseroles.</p>"
@@ -692,7 +747,6 @@ def meta():
                 "low_sodium",
                 "balanced",
                 "bodybuilding",
-                "vegan",
             ],
         }
     )
@@ -722,6 +776,7 @@ def matches():
 @bp.get("/mealmap/recommend")
 def recommend():
     selected = request.args.get("selected", "").strip()
+    filter_query = request.args.get("filter_query", "").strip()
     profile = request.args.get("profile", "none").strip().lower()
     model_name = request.args.get("model", DEFAULT_MODEL).strip().lower()
 
@@ -734,8 +789,12 @@ def recommend():
     candidates = recommend_from_selected_recipe(selected, model_name=model_name, top_k=350)
     if candidates.empty:
         return jsonify({"recipes": []})
-    
-    
+
+    if filter_query:
+        _, exclusions = parse_query_exclusions(filter_query)
+        candidates = apply_exclusion_filter(candidates, exclusions)
+        if candidates.empty:
+            return jsonify({"recipes": []})
 
     ranked = profile_sort(candidates, profile).head(RECOMMEND_LIMIT)
     payload = [build_payload(row, profile) for _, row in ranked.iterrows()]
@@ -755,7 +814,7 @@ def mealmap_chat():
 
     if profile not in {
         "none", "high_protein", "low_carb", "keto", "low_calorie",
-        "low_fat", "low_sodium", "balanced", "bodybuilding", "vegan"
+        "low_fat", "low_sodium", "balanced", "bodybuilding"
     }:
         profile = "none"
 
@@ -789,6 +848,7 @@ def mealmap_chat():
         refined_query=refined_query,
         recipes=payload,
     )
+    sources = build_recipe_sources(payload)
 
     return jsonify(
         {
@@ -798,6 +858,7 @@ def mealmap_chat():
             "profile_used": refined_profile,
             "model_used": refined_model,
             "matches": payload,
+            "sources": sources,
             "answer": llm_answer,
         }
     )
