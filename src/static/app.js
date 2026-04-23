@@ -177,6 +177,7 @@ async function updateQueryBreakdownPanel(queryText) {
   try {
     const res = await fetch(`/mealmap/svd-explain?query=${encodeURIComponent(q)}`);
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "SVD explain failed");
     if (queryBreakdownBadge) {
       queryBreakdownBadge.textContent =
         data.svd_component_count != null && data.svd_component_count !== undefined
@@ -225,6 +226,7 @@ async function loadCardWhyExplain(card, recipe) {
       `/mealmap/svd-explain?query=${encodeURIComponent(q)}&title=${encodeURIComponent(title)}`
     );
     const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "SVD explain failed");
     if (!data.available) {
       explainEl.textContent = data.hint || "Explanation not available.";
       return;

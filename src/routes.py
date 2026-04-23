@@ -489,7 +489,7 @@ def build_svd_explain_payload(query_raw, recipe_title=None):
         {
             "available": True,
             "axes": axes,
-            "dimension_indices": dim_indices,
+            "dimension_indices": [int(i) for i in dim_indices],
             "query_strength": query_strength,
             "recipe_strength": recipe_strength,
             "match_strength": match_strength,
@@ -772,7 +772,7 @@ def build_recipe_context(recipes):
 
         chunks.append(
             f"Title: {recipe.get('title', '')}\n"
-            f"Source: {recipe.get('link', '') or recipe.get('source', '') or recipe.get('site', '')}\n"
+            f"Source: {recipe.get('link', '')}\n"
             f"Calories: {recipe.get('calories', 'N/A')}\n"
             f"Protein: {recipe.get('protein_g', 'N/A')} g\n"
             f"Carbs: {recipe.get('carbs_g', 'N/A')} g\n"
@@ -786,12 +786,7 @@ def build_recipe_context(recipes):
 
 
 def recipe_public_url(recipe):
-    raw = str(recipe.get("link") or recipe.get("source") or recipe.get("site") or "").strip()
-    if not raw:
-        return ""
-    if raw.startswith(("http://", "https://")):
-        return raw
-    return f"https://{raw.lstrip('/')}"
+    return str(recipe.get("link") or "").strip()
 
 
 def linkify_recipe_names_in_answer(answer_html, recipes):
@@ -808,6 +803,12 @@ def linkify_recipe_names_in_answer(answer_html, recipes):
             continue
         esc_href = html.escape(href, quote=True)
         esc_title = html.escape(title)
+        anchor_pat = re.compile(
+            r"<a\s+[^>]*>\s*" + re.escape(title) + r"\s*</a>\s*:",
+            re.IGNORECASE,
+        )
+        out = anchor_pat.sub(repl, out)
+
         pat = re.compile(
             r"<strong>\s*" + re.escape(title) + r"\s*:\s*</strong>",
             re.IGNORECASE,
@@ -928,8 +929,19 @@ def meta():
 def mealmap_svd_explain():
     query = request.args.get("query", "").strip()
     title = request.args.get("title", "").strip()
-    payload = build_svd_explain_payload(query, recipe_title=title or None)
-    return jsonify(payload)
+    try:
+        payload = build_svd_explain_payload(query, recipe_title=title or None)
+        return jsonify(payload)
+    except Exception as exc:
+        logger.exception("SVD explain failed: %s", exc)
+        return jsonify(
+            {
+                "available": False,
+                "hint": "SVD breakdown is temporarily unavailable.",
+                "svd_component_count": int(SVD_COMPONENTS),
+                "mode": "recipe" if title else "query",
+            }
+        )
 
 
 @bp.get("/mealmap/matches")
