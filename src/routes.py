@@ -816,18 +816,18 @@ def linkify_recipe_names_in_answer(answer_html, recipes):
             continue
         esc_href = html.escape(href, quote=True)
         esc_title = html.escape(title)
+        repl = (
+            f'<a href="{esc_href}" target="_blank" rel="noopener noreferrer">{esc_title}</a>:'
+        )
         anchor_pat = re.compile(
             r"<a\s+[^>]*>\s*" + re.escape(title) + r"\s*</a>\s*:",
             re.IGNORECASE,
         )
-        out = anchor_pat.sub(repl, out)
+        out = anchor_pat.sub(repl, out, count=1)
 
         pat = re.compile(
             r"<strong>\s*" + re.escape(title) + r"\s*:\s*</strong>",
             re.IGNORECASE,
-        )
-        repl = (
-            f'<a href="{esc_href}" target="_blank" rel="noopener noreferrer">{esc_title}</a>:'
         )
         out, n = pat.subn(repl, out, count=1)
         if n:

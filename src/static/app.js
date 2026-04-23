@@ -260,7 +260,7 @@ function updateActiveState() {
 
 function updateResultsTitle(prefix = "Results") {
   if (!selectedFood) {
-    resultsTitle.textContent = "Results";
+    resultsTitle.textContent = "Search to get started";
     return;
   }
   resultsTitle.textContent = `${prefix} for "${selectedFood}"`;
@@ -684,7 +684,7 @@ async function fetchRagAnswer(query) {
 
     if (!response.ok) {
       setStatus(data.error || "Could not load RAG response.", true);
-      resultsTitle.textContent = "Results";
+      updateResultsTitle();
       return;
     }
 
@@ -706,7 +706,7 @@ async function fetchRagAnswer(query) {
   } catch (error) {
     console.error(error);
     setStatus("Could not load RAG response.", true);
-    resultsTitle.textContent = "Results";
+    updateResultsTitle();
   }
 }
 
