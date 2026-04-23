@@ -459,6 +459,189 @@ select {
   content: "→";
 }
 
+/* SVD query breakdown (left column) */
+.query-breakdown {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.query-breakdown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.query-breakdown-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.qb-badge {
+  min-width: 32px;
+  height: 28px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.query-breakdown-body.hidden {
+  display: none;
+}
+
+.latent-card {
+  background: #fffefb;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 12px 10px;
+}
+
+.latent-kicker {
+  margin: 0 0 8px;
+  font-family: 'Lora', Georgia, serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--primary-dark);
+}
+
+.radar-wrap,
+.card-radar-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#queryRadarSvg,
+.card-radar-svg {
+  width: 100%;
+  max-width: 260px;
+  height: auto;
+  display: block;
+}
+
+.qb-explain {
+  margin: 14px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.qb-empty {
+  margin: 0;
+  font-family: 'Lora', Georgia, serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #57534e;
+}
+
+/* Recipe card flip + “why chosen” */
+.recipe-flip-card {
+  position: relative;
+  perspective: 1100px;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.recipe-flip-card:not(.flipped):hover,
+.recipe-flip-card:not(.flipped):focus-within {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(100, 30, 0, 0.10);
+  border-color: var(--border);
+  border-top-color: var(--primary);
+  outline: none;
+}
+
+.recipe-flip-card.flipped {
+  cursor: default;
+}
+
+.flip-inner {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.55s ease;
+  min-height: 300px;
+}
+
+.recipe-flip-card.flipped .flip-inner {
+  transform: rotateY(180deg);
+}
+
+.flip-face {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+.flip-front {
+  position: relative;
+  z-index: 1;
+}
+
+.flip-back {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(180deg);
+  padding: 4px 2px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.flip-back-btn {
+  align-self: flex-start;
+  margin-bottom: 4px;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.flip-back-btn:hover {
+  text-decoration: underline;
+}
+
+.why-chosen-btn {
+  width: 100%;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--primary-dark);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.why-chosen-btn:hover {
+  background: var(--primary-light);
+  border-color: #fdba74;
+}
+
+.why-explain {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 /* Modal */
 .modal.hidden {
   display: none !important;

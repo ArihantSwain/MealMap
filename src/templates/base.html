@@ -75,6 +75,23 @@
             <button class="filter-btn" data-diet="balanced">Balanced</button>
             <button class="filter-btn" data-diet="bodybuilding">Bodybuilding</button>
           </div>
+
+          <div id="queryBreakdown" class="query-breakdown" aria-live="polite">
+            <div class="query-breakdown-header">
+              <h3 class="query-breakdown-title">Query breakdown</h3>
+              <span id="queryBreakdownBadge" class="qb-badge" title="SVD components fitted on the corpus">—</span>
+            </div>
+            <div id="queryBreakdownBody" class="query-breakdown-body hidden">
+              <div class="latent-card">
+                <p class="latent-kicker">Latent dimensions</p>
+                <div class="radar-wrap">
+                  <svg id="queryRadarSvg" viewBox="0 0 304 304" role="img" aria-label="Query topic radar"></svg>
+                </div>
+              </div>
+              <p id="queryBreakdownExplain" class="qb-explain"></p>
+            </div>
+            <p id="queryBreakdownEmpty" class="qb-empty">Run a search to see which terms influenced the ranking!</p>
+          </div>
         </div>
       </section>
 

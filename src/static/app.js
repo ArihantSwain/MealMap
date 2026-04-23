@@ -7,6 +7,7 @@ let defaultMealmapModel = "tfidf";
 let autocompleteTimer = null;
 let selectedRecipeTitle = "";
 let lastUserQuery = "";
+let retrievalExplainQuery = "";
 
 // tracks titles currently in the meal plan
 let planTitles = new Set();
@@ -24,6 +25,12 @@ const modelSelect = document.getElementById("modelSelect");
 const showModelOptions = document.getElementById("showModelOptions");
 const modelOptionsWrap = document.getElementById("modelOptionsWrap");
 const matchDropdown = document.getElementById("matchDropdown");
+
+const queryBreakdownBody = document.getElementById("queryBreakdownBody");
+const queryBreakdownEmpty = document.getElementById("queryBreakdownEmpty");
+const queryRadarSvg = document.getElementById("queryRadarSvg");
+const queryBreakdownExplain = document.getElementById("queryBreakdownExplain");
+const queryBreakdownBadge = document.getElementById("queryBreakdownBadge");
 
 const llmAnswerPanel = document.getElementById("llmAnswerPanel");
 const llmAnswerText = document.getElementById("llmAnswerText");
@@ -106,6 +113,148 @@ function normalizeList(value) {
     .split("\n")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function drawRadarChart(svg, labels, values, options = {}) {
+  if (!svg || !labels?.length || !values?.length || labels.length !== values.length) {
+    if (svg) svg.innerHTML = "";
+    return;
+  }
+  const vb = 304;
+  const cx = vb / 2;
+  const cy = vb / 2;
+  const maxR = 118;
+  const n = labels.length;
+  const levels = [0.25, 0.5, 0.75, 1];
+  const fill = options.fill ?? "rgba(22, 101, 52, 0.18)";
+  const stroke = options.stroke ?? "#15803d";
+  const gridStroke = options.gridStroke ?? "rgba(120, 113, 108, 0.28)";
+
+  const angle = (i) => -Math.PI / 2 + (2 * Math.PI * i) / n;
+  const pt = (i, t) => {
+    const a = angle(i);
+    return [cx + maxR * t * Math.cos(a), cy + maxR * t * Math.sin(a)];
+  };
+
+  let g = `<defs><style>.radar-label{font-family:Raleway,system-ui,sans-serif;font-size:10px;font-weight:600;fill:#57534e}</style></defs>`;
+  for (const lev of levels) {
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const [x, y] = pt(i, lev);
+      pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    }
+    g += `<polygon fill="none" stroke="${gridStroke}" stroke-width="1" points="${pts.join(" ")}"/>`;
+  }
+  for (let i = 0; i < n; i++) {
+    const [x, y] = pt(i, 1);
+    g += `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${gridStroke}" stroke-width="1"/>`;
+  }
+  const polyPts = [];
+  for (let i = 0; i < n; i++) {
+    const t = Math.max(0, Math.min(1, Number(values[i]) || 0));
+    const [x, y] = pt(i, t);
+    polyPts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+  }
+  g += `<polygon fill="${fill}" stroke="${stroke}" stroke-width="1.6" points="${polyPts.join(" ")}"/>`;
+
+  const labelR = maxR + 36;
+  for (let i = 0; i < n; i++) {
+    const a = angle(i);
+    const lx = cx + labelR * Math.cos(a);
+    const ly = cy + labelR * Math.sin(a);
+    const raw = String(labels[i] || "");
+    const short = raw.length > 44 ? `${raw.slice(0, 41)}…` : raw;
+    g += `<text class="radar-label" x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="middle">${escapeHtml(short)}</text>`;
+  }
+
+  svg.setAttribute("viewBox", `0 0 ${vb} ${vb}`);
+  svg.innerHTML = g;
+}
+
+function resetQueryBreakdownToEmpty() {
+  if (!queryBreakdownBody || !queryBreakdownEmpty || !queryRadarSvg) return;
+  queryBreakdownBody.classList.add("hidden");
+  queryBreakdownEmpty.classList.remove("hidden");
+  queryBreakdownEmpty.textContent = "Run a search to see which terms influenced the ranking!";
+  queryRadarSvg.innerHTML = "";
+  if (queryBreakdownExplain) queryBreakdownExplain.textContent = "";
+  if (queryBreakdownBadge) queryBreakdownBadge.textContent = "—";
+}
+
+async function updateQueryBreakdownPanel(queryText) {
+  if (!queryBreakdownBody || !queryRadarSvg || !queryBreakdownEmpty) return;
+  const q = (queryText || "").trim();
+  if (!q) {
+    resetQueryBreakdownToEmpty();
+    return;
+  }
+  try {
+    const res = await fetch(`/mealmap/svd-explain?query=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (queryBreakdownBadge) {
+      queryBreakdownBadge.textContent =
+        data.svd_component_count != null && data.svd_component_count !== undefined
+          ? String(data.svd_component_count)
+          : "—";
+    }
+    if (!data.available) {
+      queryBreakdownBody.classList.add("hidden");
+      queryBreakdownEmpty.classList.remove("hidden");
+      queryBreakdownEmpty.textContent = data.hint || "SVD breakdown is not available.";
+      return;
+    }
+    queryBreakdownEmpty.classList.add("hidden");
+    queryBreakdownBody.classList.remove("hidden");
+    drawRadarChart(queryRadarSvg, data.axes, data.query_strength, {
+      fill: currentModel === "svd" ? "rgba(22, 101, 52, 0.2)" : "rgba(100, 116, 139, 0.16)",
+      stroke: currentModel === "svd" ? "#15803d" : "#64748b",
+    });
+    const note =
+      currentModel === "svd"
+        ? ""
+        : "Results are ranked with TF‑IDF right now; this chart still maps your wording into the same SVD topic space used for semantic search. ";
+    if (queryBreakdownExplain) queryBreakdownExplain.textContent = `${note}${data.explanation || ""}`;
+  } catch {
+    queryBreakdownBody.classList.add("hidden");
+    queryBreakdownEmpty.classList.remove("hidden");
+    queryBreakdownEmpty.textContent = "Could not load topic breakdown.";
+  }
+}
+
+async function loadCardWhyExplain(card, recipe) {
+  const explainEl = card.querySelector(".why-explain");
+  const svg = card.querySelector(".card-radar-svg");
+  if (!explainEl || !svg) return;
+  const title = recipe?.title || "";
+  const q =
+    retrievalExplainQuery.trim() || lastUserQuery.trim() || searchInput.value.trim();
+  explainEl.textContent = "Loading…";
+  svg.innerHTML = "";
+  if (!q || !title) {
+    explainEl.textContent = "Run a search first so we can compare your retrieval text to this recipe.";
+    return;
+  }
+  try {
+    const res = await fetch(
+      `/mealmap/svd-explain?query=${encodeURIComponent(q)}&title=${encodeURIComponent(title)}`
+    );
+    const data = await res.json();
+    if (!data.available) {
+      explainEl.textContent = data.hint || "Explanation not available.";
+      return;
+    }
+    const vals =
+      Array.isArray(data.match_strength) && data.match_strength.length
+        ? data.match_strength
+        : data.query_strength;
+    drawRadarChart(svg, data.axes, vals, {
+      fill: "rgba(22, 101, 52, 0.22)",
+      stroke: "#15803d",
+    });
+    explainEl.textContent = data.explanation || "";
+  } catch {
+    explainEl.textContent = "Could not load explanation.";
+  }
 }
 
 // ── Search UI ─────────────────────────────────────────────────────────────────
@@ -228,25 +377,38 @@ function renderRagAnswer(data) {
 function recipeCard(recipe, index) {
   const title = recipe.title || "Untitled Recipe";
   return `
-    <article class="card clickable-card" data-index="${index}" role="button" tabindex="0">
-      <div class="card-top">
-        <h3>${escapeHtml(title)}</h3>
-        <div class="meta-row">
-          ${recipe.diet ? `<span class="badge accent">${escapeHtml(niceDietLabel(recipe.diet))}</span>` : ""}
-          <span class="badge">${displayValue(recipe.servings)} servings</span>
+    <article class="card recipe-flip-card" data-index="${index}" tabindex="0" aria-expanded="false">
+      <div class="flip-inner">
+        <div class="flip-face flip-front">
+          <div class="card-top">
+            <h3>${escapeHtml(title)}</h3>
+            <div class="meta-row">
+              ${recipe.diet ? `<span class="badge accent">${escapeHtml(niceDietLabel(recipe.diet))}</span>` : ""}
+              <span class="badge">${displayValue(recipe.servings)} servings</span>
+            </div>
+          </div>
+
+          <div class="nutrition-grid">
+            <div class="nutrition-box"><div class="label">Calories</div><div class="value">${displayValue(recipe.calories)}</div></div>
+            <div class="nutrition-box"><div class="label">Protein</div><div class="value">${displayValue(recipe.protein_g, "g")}</div></div>
+            <div class="nutrition-box"><div class="label">Carbs</div><div class="value">${displayValue(recipe.carbs_g, "g")}</div></div>
+            <div class="nutrition-box"><div class="label">Fat</div><div class="value">${displayValue(recipe.fat_g, "g")}</div></div>
+            <div class="nutrition-box"><div class="label">Fiber</div><div class="value">${displayValue(recipe.fiber_g, "g")}</div></div>
+            <div class="nutrition-box"><div class="label">Sodium</div><div class="value">${displayValue(recipe.sodium_mg, " mg")}</div></div>
+          </div>
+
+          <button type="button" class="why-chosen-btn">See why this was chosen</button>
+          <p class="open-hint">View recipe</p>
+        </div>
+        <div class="flip-face flip-back">
+          <button type="button" class="flip-back-btn">← Back to recipe</button>
+          <p class="latent-kicker">Latent dimensions</p>
+          <div class="card-radar-wrap">
+            <svg class="card-radar-svg" viewBox="0 0 304 304" role="img" aria-label="Recipe topic radar"></svg>
+          </div>
+          <p class="why-explain"></p>
         </div>
       </div>
-
-      <div class="nutrition-grid">
-        <div class="nutrition-box"><div class="label">Calories</div><div class="value">${displayValue(recipe.calories)}</div></div>
-        <div class="nutrition-box"><div class="label">Protein</div><div class="value">${displayValue(recipe.protein_g, "g")}</div></div>
-        <div class="nutrition-box"><div class="label">Carbs</div><div class="value">${displayValue(recipe.carbs_g, "g")}</div></div>
-        <div class="nutrition-box"><div class="label">Fat</div><div class="value">${displayValue(recipe.fat_g, "g")}</div></div>
-        <div class="nutrition-box"><div class="label">Fiber</div><div class="value">${displayValue(recipe.fiber_g, "g")}</div></div>
-        <div class="nutrition-box"><div class="label">Sodium</div><div class="value">${displayValue(recipe.sodium_mg, " mg")}</div></div>
-      </div>
-
-      <p class="open-hint">View recipe</p>
     </article>
   `;
 }
@@ -262,20 +424,6 @@ function renderRecipes(recipes) {
 
   recipesGrid.innerHTML = recipes.map((recipe, index) => recipeCard(recipe, index)).join("");
   setStatus(`Showing ${recipes.length} recipes using ${niceModelLabel(currentModel)}.`);
-  document.querySelectorAll(".clickable-card").forEach((card) => {
-    const open = () => {
-      const index = Number(card.dataset.index);
-      openRecipeModal(currentRecipes[index]);
-    };
-
-    card.addEventListener("click", open);
-    card.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        open();
-      }
-    });
-  });
 }
 
 // ── Recipe modal ──────────────────────────────────────────────────────────────
@@ -572,6 +720,7 @@ async function fetchRagAnswer(query) {
     selectedFood = data.refined_query || cleanQuery;
     selectedRecipeTitle = "";
     lastUserQuery = cleanQuery;
+    retrievalExplainQuery = data.refined_query || cleanQuery;
     searchInput.value = selectedFood;
     currentModel = data.model_used || currentModel;
     modelSelect.value = currentModel;
@@ -580,6 +729,7 @@ async function fetchRagAnswer(query) {
     updateResultsTitle("Matches");
     renderRagAnswer(data);
     renderRecipes(data.matches || []);
+    void updateQueryBreakdownPanel(retrievalExplainQuery);
     hideMatchDropdown();
     setStatus(`Showing retrieved recipes for refined query: ${data.refined_query}`);
   } catch (error) {
@@ -629,7 +779,9 @@ async function fetchRecommendations(selected) {
     );
     const data = await response.json();
     hideMatchDropdown();
+    retrievalExplainQuery = (lastUserQuery && lastUserQuery.trim()) || selected || "";
     renderRecipes(data.recipes || []);
+    void updateQueryBreakdownPanel(retrievalExplainQuery);
   } catch (error) {
     console.error(error);
     setStatus("Could not load recipes.", true);
@@ -666,6 +818,8 @@ searchInput.addEventListener("input", () => {
 
   if (!query) {
     hideMatchDropdown();
+    retrievalExplainQuery = "";
+    resetQueryBreakdownToEmpty();
     return;
   }
 
@@ -763,6 +917,41 @@ clearFiltersButton.addEventListener("click", () => {
   }
 });
 
+recipesGrid.addEventListener("click", (e) => {
+  const card = e.target.closest(".recipe-flip-card");
+  if (!card) return;
+  const index = Number(card.dataset.index);
+  const recipe = currentRecipes[index];
+  if (e.target.closest(".why-chosen-btn")) {
+    e.preventDefault();
+    e.stopPropagation();
+    card.classList.add("flipped");
+    card.setAttribute("aria-expanded", "true");
+    void loadCardWhyExplain(card, recipe);
+    return;
+  }
+  if (e.target.closest(".flip-back-btn")) {
+    e.preventDefault();
+    e.stopPropagation();
+    card.classList.remove("flipped");
+    card.setAttribute("aria-expanded", "false");
+    return;
+  }
+  if (card.classList.contains("flipped")) return;
+  if (!recipe) return;
+  openRecipeModal(recipe);
+});
+
+recipesGrid.addEventListener("keydown", (e) => {
+  const card = e.target.closest(".recipe-flip-card");
+  if (!card || card.classList.contains("flipped")) return;
+  if (e.target.closest(".why-chosen-btn")) return;
+  if (e.key !== "Enter" && e.key !== " ") return;
+  e.preventDefault();
+  const index = Number(card.dataset.index);
+  openRecipeModal(currentRecipes[index]);
+});
+
 closeModalButton.addEventListener("click", closeRecipeModal);
 modalBackdrop.addEventListener("click", closeRecipeModal);
 
@@ -774,6 +963,12 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     if (!recipeModal.classList.contains("hidden")) closeRecipeModal();
     else if (!mealPlanDrawer.classList.contains("hidden")) closeDrawer();
+    else {
+      document.querySelectorAll(".recipe-flip-card.flipped").forEach((c) => {
+        c.classList.remove("flipped");
+        c.setAttribute("aria-expanded", "false");
+      });
+    }
   }
 });
 
@@ -805,3 +1000,4 @@ if (ragSources) ragSources.innerHTML = "";
 fetchMeta();
 applyModelVisibility();
 updateActiveState();
+resetQueryBreakdownToEmpty();

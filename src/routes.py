@@ -25,6 +25,7 @@ DATA_PATH = BASE_DIR / "data" / "recipes_enriched.csv"
 SEARCH_LIMIT = 12
 RECOMMEND_LIMIT = 24
 DEFAULT_MODEL = "tfidf"
+SVD_RADAR_DIMS = 6
 
 DF = None
 
@@ -379,6 +380,124 @@ def lexical_overlap_bonus(query, row):
     ner_overlap = len(q_tokens & ner_tokens) / max(len(q_tokens), 1)
 
     return 100.0 * (0.55 * title_overlap + 0.30 * ner_overlap + 0.15 * ingredient_overlap)
+
+
+def find_df_index_by_title(title):
+    ensure_models_loaded()
+    t = normalize_text(title or "")
+    if not t:
+        return None
+    hits = DF.index[DF["normalized_title"] == t].tolist()
+    if hits:
+        return int(hits[0])
+    title_query = TFIDF_VECTORIZER.transform([t])
+    scores = cosine_similarity(title_query, TFIDF_MATRIX).ravel()
+    return int(np.argmax(scores))
+
+
+def svd_axis_terms_for_dim(dim_k, top_n=2):
+    names = np.array(TFIDF_VECTORIZER.get_feature_names_out())
+    comp = SVD_MODEL.components_[int(dim_k)]
+    top_idx = np.argsort(np.abs(comp))[-16:][::-1]
+    picked = []
+    for i in top_idx:
+        w = str(names[int(i)]).replace("\n", " ").strip()
+        if len(w) > 24:
+            w = w[:21] + "…"
+        if w and w not in picked:
+            picked.append(w)
+        if len(picked) >= top_n:
+            break
+    return " · ".join(picked) if picked else f"topic {dim_k}"
+
+
+def build_svd_explain_payload(query_raw, recipe_title=None):
+    ensure_models_loaded()
+    base = {
+        "available": False,
+        "mode": "recipe" if recipe_title else "query",
+        "svd_component_count": int(SVD_COMPONENTS),
+    }
+    if SVD_MODEL is None or SVD_MATRIX is None:
+        base["hint"] = "SVD is not available for this dataset size."
+        return base
+
+    cleaned, _ = parse_query_exclusions(query_raw or "")
+    if not cleaned:
+        base["hint"] = "Run a search to see which terms influenced the ranking."
+        return base
+
+    q_tfidf = TFIDF_VECTORIZER.transform([cleaned])
+    q = normalize(SVD_MODEL.transform(q_tfidf)).ravel()
+    n_comp = len(q)
+    n_show = min(SVD_RADAR_DIMS, n_comp)
+
+    r = None
+    if recipe_title:
+        idx = find_df_index_by_title(recipe_title)
+        if idx is None:
+            base["hint"] = "Could not match that recipe title in the index."
+            return base
+        r = SVD_MATRIX[idx]
+
+    if r is None:
+        dim_indices = list(np.argsort(-np.abs(q))[:n_show])
+    else:
+        contrib = q * r
+        pos = np.maximum(0.0, contrib)
+        if float(pos.sum()) > 1e-10:
+            dim_indices = list(np.argsort(-pos)[:n_show])
+        else:
+            dim_indices = list(np.argsort(-np.abs(contrib))[:n_show])
+
+    axes = [svd_axis_terms_for_dim(k) for k in dim_indices]
+    q_sel = np.abs(q[dim_indices])
+    max_q = max(float(q_sel.max()) if q_sel.size else 0.0, 1e-9)
+    query_strength = np.round(q_sel / max_q, 4).tolist()
+
+    recipe_strength = None
+    match_strength = None
+    cosine_sim = None
+    if r is not None:
+        cosine_sim = float(np.dot(q, r))
+        m_sel = np.maximum(0.0, (q * r)[dim_indices])
+        max_m = max(float(m_sel.max()) if m_sel.size else 0.0, 1e-9)
+        match_strength = np.round(m_sel / max_m, 4).tolist()
+        r_sel = np.abs(r[dim_indices])
+        max_br = max(max_q, float(r_sel.max()) if r_sel.size else 0.0, 1e-9)
+        recipe_strength = np.round(r_sel / max_br, 4).tolist()
+
+    lead = ", ".join(axes[:3]) if axes else ""
+    if r is None:
+        explanation = (
+            f"Your retrieval text most strongly activates these compressed topics: {lead}. "
+            "Each label is built from the highest-weight vocabulary terms on that SVD axis (TF‑IDF on titles, ingredients, and entities). "
+            "Higher spikes mean more of your wording aligns with that latent direction."
+        )
+    else:
+        explanation = (
+            f"Similarity is driven most by overlap on: {lead}. "
+            f"The chart highlights dimensions where your query and this recipe point the same way in topic space "
+            f"(cosine similarity in normalized SVD space is about {cosine_sim:.2f}). "
+            "Ranking also blends a lexical overlap bonus with the raw retrieval score."
+        )
+        if cosine_sim < 0.12:
+            explanation += " Match strength is modest in topic space; other signals may dominate ordering."
+
+    base.update(
+        {
+            "available": True,
+            "axes": axes,
+            "dimension_indices": dim_indices,
+            "query_strength": query_strength,
+            "recipe_strength": recipe_strength,
+            "match_strength": match_strength,
+            "cosine_similarity": cosine_sim,
+            "explanation": explanation,
+            "retrieval_text": cleaned,
+        }
+    )
+    return base
 
 
 def retrieve_candidates(query, model_name, top_k=250):
@@ -750,6 +869,14 @@ def meta():
             ],
         }
     )
+
+
+@bp.get("/mealmap/svd-explain")
+def mealmap_svd_explain():
+    query = request.args.get("query", "").strip()
+    title = request.args.get("title", "").strip()
+    payload = build_svd_explain_payload(query, recipe_title=title or None)
+    return jsonify(payload)
 
 
 @bp.get("/mealmap/matches")
