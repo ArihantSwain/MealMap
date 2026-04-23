@@ -151,6 +151,10 @@ select {
 .search-panel {
   position: sticky;
   top: 20px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 .search-card,
@@ -552,6 +556,11 @@ select {
   margin-top: 3px;
 }
 
+.why-axis-list {
+  max-height: 92px;
+  overflow-y: auto;
+}
+
 .qb-explain {
   margin: 14px 0 0;
   font-size: 13px;
@@ -617,7 +626,9 @@ select {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: visible;
+  -webkit-overflow-scrolling: touch;
 }
 
 .flip-back-btn {
@@ -656,10 +667,10 @@ select {
 }
 
 .why-explain {
-  margin: 0;
-  font-size: 12px;
+  margin: 2px 0 0;
+  font-size: 12.5px;
   line-height: 1.5;
-  color: var(--muted);
+  color: #57534e;
 }
 
 /* Modal */

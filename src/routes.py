@@ -849,7 +849,7 @@ def build_recipe_context(recipes):
 
         chunks.append(
             f"Title: {recipe.get('title', '')}\n"
-            f"Source: {recipe.get('link', '')}\n"
+            f"Source: {recipe_public_url(recipe)}\n"
             f"Calories: {recipe.get('calories', 'N/A')}\n"
             f"Protein: {recipe.get('protein_g', 'N/A')} g\n"
             f"Carbs: {recipe.get('carbs_g', 'N/A')} g\n"
@@ -863,7 +863,18 @@ def build_recipe_context(recipes):
 
 
 def recipe_public_url(recipe):
-    return str(recipe.get("link") or "").strip()
+    raw = str(recipe.get("link") or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith(("http://", "https://")):
+        return raw
+    if raw.startswith("//"):
+        return f"https:{raw}"
+    if raw.startswith("/"):
+        return ""
+    if re.match(r"^[a-z0-9.-]+\.[a-z]{2,}(/.*)?$", raw, re.I):
+        return f"https://{raw}"
+    return ""
 
 
 def linkify_recipe_names_in_answer(answer_html, recipes):

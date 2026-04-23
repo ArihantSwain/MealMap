@@ -108,15 +108,16 @@ function drawRadarChart(mountEl, labels, values, options = {}) {
     if (mountEl) mountEl.innerHTML = "";
     return;
   }
-  const vb = 420;
+  const vb = options.viewBox ?? 420;
   const cx = vb / 2;
   const cy = vb / 2;
-  const maxR = 128;
+  const maxR = options.maxRadius ?? 128;
   const n = labels.length;
   const levels = [0.25, 0.5, 0.75, 1];
   const fill = options.fill ?? "rgba(22, 101, 52, 0.18)";
   const stroke = options.stroke ?? "#15803d";
   const gridStroke = options.gridStroke ?? "rgba(120, 113, 108, 0.28)";
+  const labelFont = options.labelFontSize ?? 16;
 
   const angle = (i) => -Math.PI / 2 + (2 * Math.PI * i) / n;
   const pt = (i, t) => {
@@ -124,7 +125,7 @@ function drawRadarChart(mountEl, labels, values, options = {}) {
     return [cx + maxR * t * Math.cos(a), cy + maxR * t * Math.sin(a)];
   };
 
-  let g = `<defs><style>.radar-label{font-family:Raleway,system-ui,sans-serif;font-size:16px;font-weight:700;fill:#44403c;text-transform:capitalize}</style></defs>`;
+  let g = `<defs><style>.radar-label{font-family:Raleway,system-ui,sans-serif;font-size:${labelFont}px;font-weight:700;fill:#44403c;text-transform:capitalize}</style></defs>`;
   for (const lev of levels) {
     const pts = [];
     for (let i = 0; i < n; i++) {
@@ -145,7 +146,7 @@ function drawRadarChart(mountEl, labels, values, options = {}) {
   }
   g += `<polygon fill="${fill}" stroke="${stroke}" stroke-width="1.6" points="${polyPts.join(" ")}"/>`;
 
-  const labelR = maxR + 52;
+  const labelR = maxR + (options.labelOffset ?? 52);
   for (let i = 0; i < n; i++) {
     const a = angle(i);
     const lx = cx + labelR * Math.cos(a);
@@ -163,15 +164,17 @@ function titleCase(value) {
   return t ? t.charAt(0).toUpperCase() + t.slice(1) : "";
 }
 
-function renderAxisDefinitions(listEl, axes, defs) {
+function renderAxisDefinitions(listEl, axes, defs, maxItems = null) {
   if (!listEl) return;
   const labels = Array.isArray(axes) ? axes : [];
   const definitions = Array.isArray(defs) ? defs : [];
-  if (!labels.length) {
+  const limit = maxItems == null ? labels.length : Math.max(0, Number(maxItems) || 0);
+  const displayLabels = limit ? labels.slice(0, limit) : labels;
+  if (!displayLabels.length) {
     listEl.innerHTML = "";
     return;
   }
-  listEl.innerHTML = labels
+  listEl.innerHTML = displayLabels
     .map((label, idx) => {
       const definition = definitions[idx] || label;
       return `<li><strong>${escapeHtml(titleCase(label))}</strong> - ${escapeHtml(definition)}</li>`;
@@ -218,6 +221,9 @@ async function updateQueryBreakdownPanel(queryText) {
     drawRadarChart(queryRadarMount, data.axes, data.query_strength, {
       fill: currentModel === "svd" ? "rgba(22, 101, 52, 0.2)" : "rgba(100, 116, 139, 0.16)",
       stroke: currentModel === "svd" ? "#15803d" : "#64748b",
+      maxRadius: 126,
+      labelOffset: 50,
+      labelFontSize: 14,
     });
     renderAxisDefinitions(queryDimsList, data.axes, data.axis_definitions);
     const note =
@@ -263,9 +269,15 @@ async function loadCardWhyExplain(card, recipe) {
     drawRadarChart(mount, data.axes, vals, {
       fill: "rgba(22, 101, 52, 0.22)",
       stroke: "#15803d",
+      maxRadius: 106,
+      labelOffset: 34,
+      labelFontSize: 12,
     });
-    renderAxisDefinitions(axisList, data.axes, data.axis_definitions);
-    explainEl.textContent = data.explanation || "";
+    renderAxisDefinitions(axisList, data.axes, data.axis_definitions, 3);
+    const cos = Number(data.cosine_similarity);
+    const simPct = Number.isFinite(cos) ? Math.max(0, Math.min(100, Math.round(cos * 100))) : null;
+    const simLine = simPct == null ? "" : `Estimated topic similarity: ${simPct}%. `;
+    explainEl.textContent = `${simLine}${data.explanation || "This chart shows why this recipe aligns with your query in latent topic space."}`;
   } catch {
     explainEl.textContent = "Could not load explanation.";
   }
@@ -400,11 +412,11 @@ function recipeCard(recipe, index) {
         <div class="flip-face flip-back">
           <button type="button" class="flip-back-btn">← Back to recipe</button>
           <p class="latent-kicker">Latent dimensions</p>
+          <p class="why-explain">Loading explanation...</p>
           <div class="card-radar-wrap">
             <div class="card-radar-mount" aria-label="Recipe topic radar"></div>
           </div>
           <ul class="axis-def-list why-axis-list"></ul>
-          <p class="why-explain"></p>
         </div>
       </div>
     </article>
