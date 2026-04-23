@@ -57,6 +57,19 @@ def tokenize(value):
     return set(normalize_text(value).split())
 
 
+def to_json_safe(value):
+    """Recursively convert NumPy/Pandas scalar objects to JSON-safe Python types."""
+    if isinstance(value, dict):
+        return {str(k): to_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_json_safe(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return [to_json_safe(v) for v in value.tolist()]
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
 EXCLUDE_PATTERNS = [
     re.compile(r"\bwithout\s+((?:[\w-]+\s+){0,2}[\w-]+)\b", re.I),
     re.compile(r"\bexclude\s+((?:[\w-]+\s+){0,2}[\w-]+)\b", re.I),
@@ -931,7 +944,11 @@ def mealmap_svd_explain():
     title = request.args.get("title", "").strip()
     try:
         payload = build_svd_explain_payload(query, recipe_title=title or None)
+<<<<<<< HEAD
         return jsonify(payload)
+=======
+        return jsonify(to_json_safe(payload))
+>>>>>>> 9014191 (Patched SVD graph for deployment)
     except Exception as exc:
         logger.exception("SVD explain failed: %s", exc)
         return jsonify(
