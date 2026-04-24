@@ -824,7 +824,7 @@ def build_payload(row, profile=""):
         "retrieval_method": row.get("retrieval_method", DEFAULT_MODEL),
         "nutrition_status": nutrition_status_for_row(row),
         "nutrition_confidence": row.get("nutrition_confidence", None),
-        "diet": profile if profile != "none" else "",
+        "diet": ",".join(parse_profiles_arg(profile)),
     }
 
 def llm_refine_mealmap_query(client, user_message, current_profile="none", current_model=DEFAULT_MODEL):
@@ -1149,13 +1149,13 @@ def mealmap_svd_explain():
 @bp.get("/mealmap/matches")
 def matches():
     query = request.args.get("query", "").strip()
-    profile = request.args.get("profile", "none").strip().lower()
+    raw_profile = request.args.get("profile", "none")
+    profiles = parse_profiles_arg(raw_profile)
+    profile_param = ",".join(profiles) if profiles else "none"
     model_name = request.args.get("model", DEFAULT_MODEL).strip().lower()
 
     if model_name not in {"tfidf", "svd"}:
         model_name = DEFAULT_MODEL
-    if profile not in {"none", *VALID_PROFILES}:
-        profile = "none"
 
     if not query:
         return jsonify({"matches": []})
@@ -1164,8 +1164,8 @@ def matches():
     if candidates.empty:
         return jsonify({"matches": []})
 
-    ranked = profile_sort(candidates, profile).head(SEARCH_LIMIT)
-    payload = [build_payload(row, profile) for _, row in ranked.iterrows()]
+    ranked = profile_sort_multi(candidates, profiles).head(SEARCH_LIMIT)
+    payload = [build_payload(row, profile_param) for _, row in ranked.iterrows()]
     return jsonify({"matches": payload})
 
 
@@ -1173,13 +1173,13 @@ def matches():
 def recommend():
     selected = request.args.get("selected", "").strip()
     filter_query = request.args.get("filter_query", "").strip()
-    profile = request.args.get("profile", "none").strip().lower()
+    raw_profile = request.args.get("profile", "none")
+    profiles = parse_profiles_arg(raw_profile)
+    profile_param = ",".join(profiles) if profiles else "none"
     model_name = request.args.get("model", DEFAULT_MODEL).strip().lower()
 
     if model_name not in {"tfidf", "svd"}:
         model_name = DEFAULT_MODEL
-    if profile not in {"none", *VALID_PROFILES}:
-        profile = "none"
 
     if not selected:
         return jsonify({"recipes": []})
@@ -1194,8 +1194,8 @@ def recommend():
         if candidates.empty:
             return jsonify({"recipes": []})
 
-    ranked = profile_sort(candidates, profile).head(RECOMMEND_LIMIT)
-    payload = [build_payload(row, profile) for _, row in ranked.iterrows()]
+    ranked = profile_sort_multi(candidates, profiles).head(RECOMMEND_LIMIT)
+    payload = [build_payload(row, profile_param) for _, row in ranked.iterrows()]
     return jsonify({"recipes": payload})
 
 @bp.post("/mealmap/chat")
@@ -1204,14 +1204,12 @@ def mealmap_chat():
 
     data = request.get_json() or {}
     user_message = str(data.get("message", "")).strip()
-    profile = str(data.get("profile", "none")).strip().lower()
+    raw_profile = data.get("profile", "none")
+    user_profiles = parse_profiles_arg(raw_profile)
     model_name = str(data.get("model", DEFAULT_MODEL)).strip().lower()
 
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
-
-    if profile not in {"none", *VALID_PROFILES}:
-        profile = "none"
 
     if model_name not in {"tfidf", "svd"}:
         model_name = DEFAULT_MODEL
@@ -1222,19 +1220,32 @@ def mealmap_chat():
 
     client = LLMClient(api_key=api_key)
 
+    # The LLM refiner expects a single profile. Pass the first one; if the user
+    # has multi-selected, we use their selection verbatim for sorting and
+    # ignore the LLM's profile suggestion.
+    llm_profile_hint = user_profiles[0] if user_profiles else "none"
     refinement = llm_refine_mealmap_query(
         client,
         user_message,
-        current_profile=profile,
+        current_profile=llm_profile_hint,
         current_model=model_name,
     )
 
     refined_query = refinement["refined_query"]
     refined_model = refinement["model"]
 
+    if len(user_profiles) >= 2:
+        final_profiles = user_profiles
+    elif user_profiles:
+        final_profiles = parse_profiles_arg(refinement["profile"]) or user_profiles
+    else:
+        final_profiles = parse_profiles_arg(refinement["profile"])
+
+    profile_param = ",".join(final_profiles) if final_profiles else "none"
+
     candidates = retrieve_candidates(refined_query, model_name=refined_model, top_k=200)
-    ranked = profile_sort(candidates, profile).head(SEARCH_LIMIT)
-    payload = [build_payload(row, profile) for _, row in ranked.iterrows()]
+    ranked = profile_sort_multi(candidates, final_profiles).head(SEARCH_LIMIT)
+    payload = [build_payload(row, profile_param) for _, row in ranked.iterrows()]
 
     llm_answer = llm_answer_with_recipes(
         client,
@@ -1251,7 +1262,7 @@ def mealmap_chat():
             "original_query": user_message,
             "refined_query": refined_query,
             "refinement_reason": refinement["reason"],
-            "profile_used": profile,
+            "profile_used": profile_param,
             "model_used": refined_model,
             "matches": payload,
             "answer": llm_answer,

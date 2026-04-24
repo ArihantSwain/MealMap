@@ -1,4 +1,12 @@
-let currentDiet = "";
+const selectedDiets = new Set();
+function currentProfileParam() {
+  return selectedDiets.size ? Array.from(selectedDiets).join(",") : "none";
+}
+function dietLabelList(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter(Boolean);
+  return String(raw).split(",").map((s) => s.trim()).filter(Boolean);
+}
 let currentRecipes = [];
 let currentMatches = [];
 let selectedFood = "";
@@ -135,7 +143,7 @@ function endBusy() {
 }
 
 function getActiveProfiles() {
-  return currentDiet ? [currentDiet] : [];
+  return Array.from(selectedDiets);
 }
 
 function normalizeList(value) {
@@ -305,7 +313,9 @@ async function loadCardWhyExplain(card, recipe) {
 function updateActiveState() {
   const pieces = [];
   if (selectedFood) pieces.push({ text: selectedFood, highlight: true });
-  getActiveProfiles().forEach((diet) => pieces.push({ text: niceDietLabel(diet), highlight: false }));
+  for (const diet of selectedDiets) {
+    pieces.push({ text: niceDietLabel(diet), highlight: false });
+  }
   activeState.innerHTML = pieces
     .map(({ text, highlight }) =>
       `<span class="state-pill${highlight ? " highlight" : ""}">${escapeHtml(text)}</span>`
@@ -400,7 +410,7 @@ function renderRagAnswer(data) {
     <span class="badge">Original: ${escapeHtml(data.original_query || "")}</span>
     <span class="badge">Refined: ${escapeHtml(data.refined_query || "")}</span>
     <span class="badge">${escapeHtml(niceModelLabel(data.model_used || currentModel))}</span>
-    ${data.profile_used && data.profile_used !== "none" ? `<span class="badge">${escapeHtml(niceDietLabel(data.profile_used))}</span>` : ""}
+    ${dietLabelList(data.profile_used).map((d) => `<span class="badge">${escapeHtml(niceDietLabel(d))}</span>`).join("")}
   `;
   llmAnswerPanel.hidden = false;
 }
@@ -416,7 +426,7 @@ function recipeCard(recipe, index) {
           <div class="card-top">
             <h3>${escapeHtml(title)}</h3>
             <div class="meta-row">
-              ${recipe.diet ? `<span class="badge accent">${escapeHtml(niceDietLabel(recipe.diet))}</span>` : ""}
+              ${dietLabelList(recipe.diet).map((d) => `<span class="badge accent">${escapeHtml(niceDietLabel(d))}</span>`).join("")}
               <span class="badge">${displayValue(recipe.servings)} servings</span>
             </div>
           </div>
@@ -476,10 +486,10 @@ function openRecipeModal(recipe) {
 
   modalBody.innerHTML = `
     <div class="modal-header">
-      <p class="modal-kicker">${recipe.diet ? escapeHtml(niceDietLabel(recipe.diet)) : "MealMap Recipe"}</p>
+      <p class="modal-kicker">${dietLabelList(recipe.diet).length ? dietLabelList(recipe.diet).map((d) => escapeHtml(niceDietLabel(d))).join(" · ") : "MealMap Recipe"}</p>
       <h2 class="modal-title">${escapeHtml(recipe.title || "Untitled Recipe")}</h2>
       <div class="meta-row" style="margin-bottom:16px;">
-        ${recipe.diet ? `<span class="badge accent">${escapeHtml(niceDietLabel(recipe.diet))}</span>` : ""}
+        ${dietLabelList(recipe.diet).map((d) => `<span class="badge accent">${escapeHtml(niceDietLabel(d))}</span>`).join("")}
         <span class="badge">${displayValue(recipe.servings)} servings</span>
         <button class="add-to-plan-btn${isAdded ? " added" : ""}" id="modalAddToPlanBtn" type="button">${addBtnLabel}</button>
       </div>
@@ -736,7 +746,6 @@ async function fetchRagAnswer(query) {
   syncModelFromUI();
 
   try {
-    const profile = getActiveProfiles()[0] || "none";
     const response = await fetch("/mealmap/chat", {
       method: "POST",
       headers: {
@@ -744,7 +753,7 @@ async function fetchRagAnswer(query) {
       },
       body: JSON.stringify({
         message: cleanQuery,
-        profile,
+        profile: currentProfileParam(),
         model: currentModel
       })
     });
@@ -797,11 +806,10 @@ async function fetchMatchSuggestions(query) {
   }
 
   syncModelFromUI();
-  const profile = getActiveProfiles()[0] || "none";
 
   try {
     const response = await fetch(
-      `/mealmap/matches?query=${encodeURIComponent(cleanQuery)}&profile=${encodeURIComponent(profile)}&model=${encodeURIComponent(currentModel)}`
+      `/mealmap/matches?query=${encodeURIComponent(cleanQuery)}&profile=${encodeURIComponent(currentProfileParam())}&model=${encodeURIComponent(currentModel)}`
     );
     const data = await response.json();
     renderMatchDropdown(data.matches || []);
@@ -826,9 +834,8 @@ async function fetchRecommendations(selected) {
   setStatus(`Loading recipes with ${niceModelLabel(currentModel)}...`);
 
   try {
-    const profile = getActiveProfiles()[0] || "none";
     const response = await fetch(
-      `/mealmap/recommend?selected=${encodeURIComponent(selected)}&profile=${encodeURIComponent(profile)}&model=${encodeURIComponent(currentModel)}&filter_query=${encodeURIComponent(lastUserQuery)}`
+      `/mealmap/recommend?selected=${encodeURIComponent(selected)}&profile=${encodeURIComponent(currentProfileParam())}&model=${encodeURIComponent(currentModel)}&filter_query=${encodeURIComponent(lastUserQuery)}`
     );
     const data = await response.json();
     if (requestToken !== recommendRequestToken) return;
@@ -941,12 +948,12 @@ filterButtons.forEach((button) => {
     if (uiBusyCount > 0) return;
     const clickedDiet = button.dataset.diet;
     if (!clickedDiet) return;
-    if (currentDiet === clickedDiet) {
-      currentDiet = "";
+
+    if (selectedDiets.has(clickedDiet)) {
+      selectedDiets.delete(clickedDiet);
       button.classList.remove("active");
     } else {
-      currentDiet = clickedDiet;
-      filterButtons.forEach((btn) => btn.classList.remove("active"));
+      selectedDiets.add(clickedDiet);
       button.classList.add("active");
     }
 
@@ -966,7 +973,7 @@ filterButtons.forEach((button) => {
 
 clearFiltersButton.addEventListener("click", () => {
   if (uiBusyCount > 0) return;
-  currentDiet = "";
+  selectedDiets.clear();
   filterButtons.forEach((btn) => btn.classList.remove("active"));
   updateActiveState();
 
