@@ -415,6 +415,21 @@ function renderRagAnswer(data) {
   llmAnswerPanel.hidden = false;
 }
 
+function showSummaryPending(data) {
+  const refined = data?.refined_query || "";
+  const original = data?.original_query || "";
+  const modelUsed = data?.model_used || currentModel;
+  const profileUsed = data?.profile_used || "";
+  llmAnswerText.textContent = "Writing a summary...";
+  ragMeta.innerHTML = `
+    <span class="badge">Original: ${escapeHtml(original)}</span>
+    <span class="badge">Refined: ${escapeHtml(refined)}</span>
+    <span class="badge">${escapeHtml(niceModelLabel(modelUsed))}</span>
+    ${dietLabelList(profileUsed).map((d) => `<span class="badge">${escapeHtml(niceDietLabel(d))}</span>`).join("")}
+  `;
+  llmAnswerPanel.hidden = false;
+}
+
 // ── Recipe cards ──────────────────────────────────────────────────────────────
 
 function recipeCard(recipe, index) {
@@ -746,7 +761,7 @@ async function fetchRagAnswer(query) {
   syncModelFromUI();
 
   try {
-    const response = await fetch("/mealmap/chat", {
+    const searchResponse = await fetch("/mealmap/chat-search", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -758,10 +773,10 @@ async function fetchRagAnswer(query) {
       })
     });
 
-    const data = await response.json();
+    const data = await searchResponse.json();
     if (requestToken !== ragRequestToken) return;
 
-    if (!response.ok) {
+    if (!searchResponse.ok) {
       setStatus(data.error || "Could not load RAG response.", true);
       updateResultsTitle();
       return;
@@ -777,11 +792,32 @@ async function fetchRagAnswer(query) {
 
     updateActiveState();
     updateResultsTitle("Matches");
-    renderRagAnswer(data);
     renderRecipes(data.matches || []);
+    showSummaryPending(data);
     void updateQueryBreakdownPanel(retrievalExplainQuery);
     hideMatchDropdown();
     setStatus(`Showing retrieved recipes for refined query: ${data.refined_query}`);
+
+    const summaryResponse = await fetch("/mealmap/chat-summary", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        original_query: data.original_query || cleanQuery,
+        refined_query: data.refined_query || cleanQuery,
+        matches: data.matches || []
+      })
+    });
+
+    const summaryData = await summaryResponse.json();
+    if (requestToken !== ragRequestToken) return;
+    if (!summaryResponse.ok) {
+      setStatus(summaryData.error || "Could not load summary.", true);
+      return;
+    }
+
+    renderRagAnswer({ ...data, answer: summaryData.answer || "" });
   } catch (error) {
     if (requestToken !== ragRequestToken) return;
     console.error(error);

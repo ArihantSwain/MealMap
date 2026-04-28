@@ -1270,6 +1270,91 @@ def mealmap_chat():
     )
 
 
+@bp.post("/mealmap/chat-search")
+def mealmap_chat_search():
+    ensure_models_loaded()
+
+    data = request.get_json() or {}
+    user_message = str(data.get("message", "")).strip()
+    profile = str(data.get("profile", "none")).strip().lower()
+    model_name = str(data.get("model", DEFAULT_MODEL)).strip().lower()
+
+    if not user_message:
+        return jsonify({"error": "Message is required"}), 400
+
+    if profile not in {"none", *VALID_PROFILES}:
+        profile = "none"
+
+    if model_name not in {"tfidf", "svd"}:
+        model_name = DEFAULT_MODEL
+
+    api_key = os.getenv("SPARK_API_KEY")
+    if not api_key:
+        return jsonify({"error": "API_KEY not set"}), 500
+
+    client = LLMClient(api_key=api_key)
+    refinement = llm_refine_mealmap_query(
+        client,
+        user_message,
+        current_profile=profile,
+        current_model=model_name,
+    )
+
+    refined_query = refinement["refined_query"]
+    refined_model = refinement["model"]
+
+    candidates = retrieve_candidates(refined_query, model_name=refined_model, top_k=200)
+    ranked = profile_sort(candidates, profile).head(SEARCH_LIMIT)
+    payload = [build_payload(row, profile) for _, row in ranked.iterrows()]
+
+    return jsonify(
+        {
+            "original_query": user_message,
+            "refined_query": refined_query,
+            "refinement_reason": refinement["reason"],
+            "profile_used": profile,
+            "model_used": refined_model,
+            "matches": payload,
+        }
+    )
+
+
+@bp.post("/mealmap/chat-summary")
+def mealmap_chat_summary():
+    ensure_models_loaded()
+
+    data = request.get_json() or {}
+    user_message = str(data.get("original_query", "")).strip()
+    refined_query = str(data.get("refined_query", "")).strip()
+    recipes = data.get("matches", [])
+
+    if not user_message:
+        return jsonify({"error": "Original query is required"}), 400
+    if not refined_query:
+        return jsonify({"error": "Refined query is required"}), 400
+
+    if not isinstance(recipes, list):
+        recipes = []
+
+    api_key = os.getenv("SPARK_API_KEY")
+    if not api_key:
+        return jsonify({"error": "API_KEY not set"}), 500
+
+    client = LLMClient(api_key=api_key)
+
+    llm_answer = llm_answer_with_recipes(
+        client,
+        user_message=user_message,
+        refined_query=refined_query,
+        recipes=recipes,
+    )
+    llm_answer = strip_trailing_sources_block(
+        linkify_recipe_names_in_answer(llm_answer, recipes)
+    )
+
+    return jsonify({"answer": llm_answer})
+
+
 @bp.post("/mealplan/add")
 def mealplan_add():
     data = request.get_json() or {}
