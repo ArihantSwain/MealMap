@@ -268,16 +268,32 @@ async function updateQueryBreakdownPanel(queryText) {
 async function loadCardWhyExplain(card, recipe) {
   const explainEl = card.querySelector(".why-explain");
   const mount = card.querySelector(".card-radar-mount");
+  const kickerEl = card.querySelector(".latent-kicker");
   if (!explainEl || !mount) return;
   const title = recipe?.title || "";
   const q =
     retrievalExplainQuery.trim() || lastUserQuery.trim() || searchInput.value.trim();
+  const isTfidf = currentModel === "tfidf";
+  if (kickerEl) {
+    kickerEl.textContent = isTfidf ? "Why this matched (TF-IDF)" : "Latent dimensions";
+  }
   explainEl.textContent = "Loading…";
   mount.innerHTML = "";
   if (!q || !title) {
     explainEl.textContent = "Run a search first so we can compare your retrieval text to this recipe.";
     return;
   }
+
+  const tfidfFallback = () => {
+    const score = Number(recipe?.tfidf_score ?? recipe?.similarity_score ?? 0);
+    const scoreLine = Number.isFinite(score) && score > 0
+      ? `TF-IDF score: ${score.toFixed(1)}. `
+      : "";
+    explainEl.textContent =
+      `${scoreLine}This recipe was ranked by overlap between your query terms and the recipe's title, ingredients, and ` +
+      `tags — higher overlap on rarer terms means a higher score. Switch to SVD for a topic-space view.`;
+  };
+
   try {
     const res = await fetch(
       `/mealmap/svd-explain?query=${encodeURIComponent(q)}&title=${encodeURIComponent(title)}`
@@ -285,7 +301,11 @@ async function loadCardWhyExplain(card, recipe) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "SVD explain failed");
     if (!data.available) {
-      explainEl.textContent = data.hint || "Explanation not available.";
+      if (isTfidf) {
+        tfidfFallback();
+      } else {
+        explainEl.textContent = data.hint || "Explanation not available.";
+      }
       return;
     }
     const vals =
@@ -293,8 +313,8 @@ async function loadCardWhyExplain(card, recipe) {
         ? data.match_strength
         : data.query_strength;
     drawRadarChart(mount, data.axes, vals, {
-      fill: "rgba(22, 101, 52, 0.22)",
-      stroke: "#15803d",
+      fill: isTfidf ? "rgba(100, 116, 139, 0.18)" : "rgba(22, 101, 52, 0.22)",
+      stroke: isTfidf ? "#64748b" : "#15803d",
       maxRadius: 106,
       labelOffset: 34,
       labelFontSize: 12,
@@ -302,9 +322,16 @@ async function loadCardWhyExplain(card, recipe) {
     const cos = Number(data.cosine_similarity);
     const simPct = Number.isFinite(cos) ? Math.max(0, Math.min(100, Math.round(cos * 100))) : null;
     const simLine = simPct == null ? "" : `Estimated topic similarity: ${simPct}%. `;
-    explainEl.textContent = `${simLine}${data.explanation || "This chart shows why this recipe aligns with your query in latent topic space."}`;
+    const modeNote = isTfidf
+      ? "Ranking used TF-IDF; the chart shows the same query mapped into the SVD topic space for context. "
+      : "";
+    explainEl.textContent = `${modeNote}${simLine}${data.explanation || "This chart shows why this recipe aligns with your query in latent topic space."}`;
   } catch {
-    explainEl.textContent = "Could not load explanation.";
+    if (isTfidf) {
+      tfidfFallback();
+    } else {
+      explainEl.textContent = "Could not load explanation.";
+    }
   }
 }
 

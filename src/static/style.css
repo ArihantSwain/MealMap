@@ -601,7 +601,7 @@ select {
   position: relative;
   transform-style: preserve-3d;
   transition: transform 0.55s ease;
-  min-height: 300px;
+  min-height: 460px;
 }
 
 .recipe-flip-card.flipped .flip-inner {
