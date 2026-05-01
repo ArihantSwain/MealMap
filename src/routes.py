@@ -1276,14 +1276,12 @@ def mealmap_chat_search():
 
     data = request.get_json() or {}
     user_message = str(data.get("message", "")).strip()
-    profile = str(data.get("profile", "none")).strip().lower()
+    raw_profile = data.get("profile", "none")
+    user_profiles = parse_profiles_arg(raw_profile)
     model_name = str(data.get("model", DEFAULT_MODEL)).strip().lower()
 
     if not user_message:
         return jsonify({"error": "Message is required"}), 400
-
-    if profile not in {"none", *VALID_PROFILES}:
-        profile = "none"
 
     if model_name not in {"tfidf", "svd"}:
         model_name = DEFAULT_MODEL
@@ -1293,26 +1291,36 @@ def mealmap_chat_search():
         return jsonify({"error": "API_KEY not set"}), 500
 
     client = LLMClient(api_key=api_key)
+    llm_profile_hint = user_profiles[0] if user_profiles else "none"
     refinement = llm_refine_mealmap_query(
         client,
         user_message,
-        current_profile=profile,
+        current_profile=llm_profile_hint,
         current_model=model_name,
     )
 
     refined_query = refinement["refined_query"]
     refined_model = refinement["model"]
 
+    if len(user_profiles) >= 2:
+        final_profiles = user_profiles
+    elif user_profiles:
+        final_profiles = parse_profiles_arg(refinement["profile"]) or user_profiles
+    else:
+        final_profiles = parse_profiles_arg(refinement["profile"])
+
+    profile_param = ",".join(final_profiles) if final_profiles else "none"
+
     candidates = retrieve_candidates(refined_query, model_name=refined_model, top_k=200)
-    ranked = profile_sort(candidates, profile).head(SEARCH_LIMIT)
-    payload = [build_payload(row, profile) for _, row in ranked.iterrows()]
+    ranked = profile_sort_multi(candidates, final_profiles).head(SEARCH_LIMIT)
+    payload = [build_payload(row, profile_param) for _, row in ranked.iterrows()]
 
     return jsonify(
         {
             "original_query": user_message,
             "refined_query": refined_query,
             "refinement_reason": refinement["reason"],
-            "profile_used": profile,
+            "profile_used": profile_param,
             "model_used": refined_model,
             "matches": payload,
         }

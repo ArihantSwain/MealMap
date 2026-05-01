@@ -576,11 +576,10 @@ select {
   color: #57534e;
 }
 
-/* Recipe card flip + “why chosen” */
+/* Recipe card + expandable “why chosen” */
 .recipe-flip-card {
   position: relative;
-  perspective: 1100px;
-  cursor: pointer;
+  cursor: default;
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
@@ -599,18 +598,13 @@ select {
 
 .flip-inner {
   position: relative;
-  transform-style: preserve-3d;
-  transition: transform 0.55s ease;
-  min-height: 460px;
-}
-
-.recipe-flip-card.flipped .flip-inner {
-  transform: rotateY(180deg);
+  display: flex;
+  flex-direction: column;
+  min-height: 300px;
 }
 
 .flip-face {
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
+  min-width: 0;
 }
 
 .flip-front {
@@ -619,16 +613,93 @@ select {
 }
 
 .flip-back {
-  position: absolute;
-  inset: 0;
-  transform: rotateY(180deg);
-  padding: 4px 2px 8px;
+  position: relative;
+  flex-shrink: 0;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  padding: 0 4px;
+  margin: 0 -2px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  transition: max-height 0.5s ease, opacity 0.35s ease, padding 0.35s ease;
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  scrollbar-color: #94a3b8 #f1f5f9;
+}
+
+.recipe-flip-card.flipped .flip-back {
+  max-height: min(72vh, 560px);
+  opacity: 1;
   overflow-y: auto;
-  overflow-x: visible;
+  overflow-x: hidden;
+  padding: 10px 4px 14px;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
+}
+
+.flip-back::-webkit-scrollbar {
+  width: 14px;
+}
+
+.flip-back::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 8px;
+  border: 4px solid transparent;
+  background-clip: padding-box;
+}
+
+.flip-back::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 8px;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.card-open-recipe-btn,
+.card-add-plan-btn {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  border: 1.5px solid var(--border);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.card-open-recipe-btn {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.card-open-recipe-btn:hover {
+  filter: brightness(1.05);
+}
+
+.card-add-plan-btn {
+  background: var(--surface-soft);
+  color: var(--primary-dark);
+}
+
+.card-add-plan-btn:hover {
+  background: var(--primary-light);
+  border-color: #fdba74;
+}
+
+.card-add-plan-btn.added {
+  border-color: var(--primary);
+  background: var(--primary-light);
+  cursor: default;
 }
 
 .flip-back-btn {
@@ -673,6 +744,34 @@ select {
   color: #57534e;
 }
 
+.why-tag-glosses {
+  margin: 0 0 10px;
+}
+
+.why-tag-gloss-intro {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #57534e;
+}
+
+.why-tag-gloss-list {
+  margin: 0 0 4px;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #44403c;
+}
+
+.why-tag-gloss-list li + li {
+  margin-top: 8px;
+}
+
+.why-tag-name {
+  font-weight: 700;
+  color: var(--primary-dark);
+}
+
 /* Modal */
 .modal.hidden {
   display: none !important;
@@ -707,6 +806,11 @@ select {
 
 .modal-header {
   margin-bottom: 20px;
+}
+
+.modal-header .meta-row .add-to-plan-btn {
+  width: 100%;
+  max-width: 100%;
 }
 
 .close-modal {
@@ -965,12 +1069,14 @@ select {
 .add-to-plan-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 7px;
   border: 1.5px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--text);
-  padding: 10px 16px;
+  min-height: 44px;
+  padding: 10px 18px;
   font-weight: 700;
   font-size: 14px;
   cursor: pointer;

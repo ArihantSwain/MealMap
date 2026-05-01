@@ -20,8 +20,8 @@ let uiBusyCount = 0;
 let ragRequestToken = 0;
 let recommendRequestToken = 0;
 
-// tracks titles currently in the meal plan
 let planTitles = new Set();
+let modalOpenRecipeTitle = "";
 
 const searchInput = document.getElementById("searchInput");
 const searchButton = document.getElementById("searchButton");
@@ -101,6 +101,60 @@ function niceModelLabel(model) {
   return model === "tfidf" ? "TF-IDF" : "SVD";
 }
 
+const PROFILE_GLOSS = {
+  high_protein:
+    "We nudge the ranking toward meals that carry more protein in each serving—think lean meat, fish, eggs, beans—so the list matches a higher-protein week without you reading every label.",
+  low_carb:
+    "Low carb here is about fewer carb grams on the sheet. Pasta-heavy or bread-forward dishes slide down so plates built around protein and veg feel easier to spot.",
+  keto:
+    "Keto is low carb taken seriously for very low net carbs. Recipes that look closer to that pattern get pulled up; ones that read like a sandwich shop or bakery fall back.",
+  low_calorie:
+    "Low calorie means lighter numbers per serving float up. Creamy, fried, or huge-portion recipes still show up if they match your search, just not at the front of the line.",
+  low_fat:
+    "Low fat favors recipes with less fat per serving. It is a simple sort on the numbers—good when you want butter, cream, and fry oil to stop dominating the picks.",
+  low_sodium:
+    "Low sodium pushes recipes with less salt on the label upward. Saucy, cured, or deli-style meals often read higher in sodium, so they land lower unless they still match hard.",
+  balanced:
+    "Balanced means no single macro runs the show. Protein, carbs, fat, and calories all count together so you get sensible everyday plates instead of one extreme trick.",
+  bodybuilding:
+    "Bodybuilding leans like high protein but with an eye on dense protein and cleaner macros—meals that feel closer to a training diet than a random takeout night.",
+};
+
+const PROFILE_GLOSS_KEYS = new Set(Object.keys(PROFILE_GLOSS));
+
+function dietProfileKeysForGloss(recipe) {
+  const raw = recipe?.diet;
+  const parts = Array.isArray(raw) ? raw : String(raw || "").split(",");
+  const out = [];
+  for (const p of parts) {
+    const k = String(p || "")
+      .trim()
+      .toLowerCase();
+    if (PROFILE_GLOSS_KEYS.has(k) && !out.includes(k)) out.push(k);
+  }
+  return out;
+}
+
+function fillWhyTagGlosses(card, recipe) {
+  const wrap = card.querySelector(".why-tag-glosses");
+  if (!wrap) return;
+  const keys = dietProfileKeysForGloss(recipe);
+  if (!keys.length) {
+    wrap.innerHTML =
+      "<p class=\"why-tag-gloss-intro\">No diet tag on this card—the sort was mostly how well the recipe matched your search text and the model score.</p>";
+    return;
+  }
+  const items = keys
+    .map((k) => {
+      const body = PROFILE_GLOSS[k];
+      if (!body) return "";
+      return `<li><span class="why-tag-name">${escapeHtml(niceDietLabel(k))}</span> ${escapeHtml(body)}</li>`;
+    })
+    .filter(Boolean)
+    .join("");
+  wrap.innerHTML = `<p class="why-tag-gloss-intro">What those tags mean in this app:</p><ul class="why-tag-gloss-list">${items}</ul>`;
+}
+
 function recipeSourceUrl(recipe) {
   const raw = String(recipe?.link || recipe?.source || recipe?.site || "").trim();
   if (!raw) return "";
@@ -126,10 +180,13 @@ function syncModelFromUI() {
 function setUiBusy(isBusy) {
   const disabled = Boolean(isBusy);
   if (searchButton) searchButton.disabled = disabled;
-  if (clearFiltersButton) clearFiltersButton.disabled = disabled;
-  filterButtons.forEach((btn) => {
-    btn.disabled = disabled;
-  });
+}
+
+function fetchWithDeadline(resource, init = {}, deadlineMs = 120000) {
+  const ctrl = new AbortController();
+  const tid = setTimeout(() => ctrl.abort(), deadlineMs);
+  const merged = { ...init, signal: ctrl.signal };
+  return fetch(resource, merged).finally(() => clearTimeout(tid));
 }
 
 function beginBusy() {
@@ -270,6 +327,7 @@ async function loadCardWhyExplain(card, recipe) {
   const mount = card.querySelector(".card-radar-mount");
   const kickerEl = card.querySelector(".latent-kicker");
   if (!explainEl || !mount) return;
+  fillWhyTagGlosses(card, recipe);
   const title = recipe?.title || "";
   const q =
     retrievalExplainQuery.trim() || lastUserQuery.trim() || searchInput.value.trim();
@@ -321,11 +379,12 @@ async function loadCardWhyExplain(card, recipe) {
     });
     const cos = Number(data.cosine_similarity);
     const simPct = Number.isFinite(cos) ? Math.max(0, Math.min(100, Math.round(cos * 100))) : null;
-    const simLine = simPct == null ? "" : `Estimated topic similarity: ${simPct}%. `;
+    const simLine =
+      simPct == null ? "" : `Rough match strength on the chart axes: about ${simPct}%. `;
     const modeNote = isTfidf
-      ? "Ranking used TF-IDF; the chart shows the same query mapped into the SVD topic space for context. "
+      ? "Ranking used TF-IDF; the chart maps the same query into SVD topic space for context. "
       : "";
-    explainEl.textContent = `${modeNote}${simLine}${data.explanation || "This chart shows why this recipe aligns with your query in latent topic space."}`;
+    explainEl.textContent = `${modeNote}${simLine}${data.explanation || "The shape is where this recipe sits in topic space next to your wording."}`;
   } catch {
     if (isTfidf) {
       tfidfFallback();
@@ -461,6 +520,8 @@ function showSummaryPending(data) {
 
 function recipeCard(recipe, index) {
   const title = recipe.title || "Untitled Recipe";
+  const inPlan = planTitles.has(recipe.title || "");
+  const planLabel = inPlan ? "✓ In plan" : "+ Add to plan";
   return `
     <article class="card recipe-flip-card" data-index="${index}" tabindex="0" aria-expanded="false">
       <div class="flip-inner">
@@ -482,11 +543,16 @@ function recipeCard(recipe, index) {
             <div class="nutrition-box"><div class="label">Sodium</div><div class="value">${displayValue(recipe.sodium_mg, " mg")}</div></div>
           </div>
 
+          <div class="card-actions">
+            <button type="button" class="card-open-recipe-btn">Open recipe</button>
+            <button type="button" class="card-add-plan-btn${inPlan ? " added" : ""}" data-recipe-title="${escapeHtml(recipe.title || "")}" aria-pressed="${inPlan ? "true" : "false"}">${planLabel}</button>
+          </div>
+
           <button type="button" class="why-chosen-btn">See why this was chosen</button>
-          <p class="open-hint">View recipe</p>
         </div>
         <div class="flip-face flip-back">
           <button type="button" class="flip-back-btn">← Back to recipe</button>
+          <div class="why-tag-glosses"></div>
           <p class="latent-kicker">Latent dimensions</p>
           <p class="why-explain">Loading explanation...</p>
           <div class="card-radar-wrap">
@@ -522,6 +588,7 @@ function listMarkup(items, ordered = false) {
 
 function openRecipeModal(recipe) {
   if (!recipe) return;
+  modalOpenRecipeTitle = recipe.title || "";
 
   const isAdded = planTitles.has(recipe.title || "");
   const addBtnLabel = isAdded ? "✓ Added to Plan" : "+ Add to Plan";
@@ -575,9 +642,20 @@ function openRecipeModal(recipe) {
 }
 
 function closeRecipeModal() {
+  modalOpenRecipeTitle = "";
   recipeModal.classList.add("hidden");
   recipeModal.setAttribute("aria-hidden", "true");
   document.body.classList.remove("modal-open");
+}
+
+function syncRecipeCardPlanButtons() {
+  document.querySelectorAll(".card-add-plan-btn").forEach((b) => {
+    const t = b.dataset.recipeTitle || "";
+    const inPlan = planTitles.has(t);
+    b.textContent = inPlan ? "✓ In plan" : "+ Add to plan";
+    b.classList.toggle("added", inPlan);
+    b.setAttribute("aria-pressed", inPlan ? "true" : "false");
+  });
 }
 
 // ── Meal plan drawer ──────────────────────────────────────────────────────────
@@ -705,9 +783,6 @@ function renderShoppingList() {
 // ── Meal plan actions ─────────────────────────────────────────────────────────
 
 async function addToPlan(recipe) {
-  const btn = document.getElementById("modalAddToPlanBtn");
-  if (!btn) return;
-
   const res = await fetch("/mealplan/add", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -722,8 +797,12 @@ async function addToPlan(recipe) {
   planTitles = new Set(data.plan.map((r) => r.title));
   updatePlanBadge();
 
-  btn.textContent = "✓ Added to Plan";
-  btn.classList.add("added");
+  const modalBtn = document.getElementById("modalAddToPlanBtn");
+  if (modalBtn && modalOpenRecipeTitle === (recipe.title || "")) {
+    modalBtn.textContent = "✓ Added to Plan";
+    modalBtn.classList.add("added");
+  }
+  syncRecipeCardPlanButtons();
 }
 
 async function removeFromPlan(title) {
@@ -735,6 +814,7 @@ async function removeFromPlan(title) {
   const data = await res.json();
   planTitles = new Set(data.plan.map((r) => r.title));
   updatePlanBadge();
+  syncRecipeCardPlanButtons();
   renderPlanView();
 }
 
@@ -749,6 +829,7 @@ async function clearPlan() {
   }
   planTitles.clear();
   updatePlanBadge();
+  syncRecipeCardPlanButtons();
   renderPlanView();
 }
 
@@ -778,27 +859,31 @@ async function fetchRagAnswer(query) {
     return;
   }
   const requestToken = ++ragRequestToken;
-  beginBusy();
-
-  llmAnswerPanel.hidden = true;
-  llmAnswerText.innerHTML = "";
-  ragMeta.innerHTML = "";
-  recipesGrid.innerHTML = "";
-  setStatus("Refining query and retrieving recipes...");
-  syncModelFromUI();
 
   try {
-    const searchResponse = await fetch("/mealmap/chat-search", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
+    beginBusy();
+    llmAnswerPanel.hidden = true;
+    llmAnswerText.innerHTML = "";
+    ragMeta.innerHTML = "";
+    recipesGrid.innerHTML = "";
+    setStatus("Refining query and retrieving recipes...");
+    syncModelFromUI();
+
+    const searchResponse = await fetchWithDeadline(
+      "/mealmap/chat-search",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          message: cleanQuery,
+          profile: currentProfileParam(),
+          model: currentModel
+        })
       },
-      body: JSON.stringify({
-        message: cleanQuery,
-        profile: currentProfileParam(),
-        model: currentModel
-      })
-    });
+      120000
+    );
 
     const data = await searchResponse.json();
     if (requestToken !== ragRequestToken) return;
@@ -825,17 +910,21 @@ async function fetchRagAnswer(query) {
     hideMatchDropdown();
     setStatus(`Showing retrieved recipes for refined query: ${data.refined_query}`);
 
-    const summaryResponse = await fetch("/mealmap/chat-summary", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
+    const summaryResponse = await fetchWithDeadline(
+      "/mealmap/chat-summary",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          original_query: data.original_query || cleanQuery,
+          refined_query: data.refined_query || cleanQuery,
+          matches: data.matches || []
+        })
       },
-      body: JSON.stringify({
-        original_query: data.original_query || cleanQuery,
-        refined_query: data.refined_query || cleanQuery,
-        matches: data.matches || []
-      })
-    });
+      120000
+    );
 
     const summaryData = await summaryResponse.json();
     if (requestToken !== ragRequestToken) return;
@@ -884,21 +973,24 @@ async function fetchMatchSuggestions(query) {
 
 async function fetchRecommendations(selected) {
   const requestToken = ++recommendRequestToken;
-  beginBusy();
-  selectedRecipeTitle = selected;
-  selectedFood = selected;
-  llmAnswerPanel.hidden = true;
-  llmAnswerText.textContent = "";
-  ragMeta.innerHTML = "";
-  syncModelFromUI();
-  updateActiveState();
-  updateResultsTitle("Recipes");
-  recipesGrid.innerHTML = "";
-  setStatus(`Loading recipes with ${niceModelLabel(currentModel)}...`);
 
   try {
-    const response = await fetch(
-      `/mealmap/recommend?selected=${encodeURIComponent(selected)}&profile=${encodeURIComponent(currentProfileParam())}&model=${encodeURIComponent(currentModel)}&filter_query=${encodeURIComponent(lastUserQuery)}`
+    beginBusy();
+    selectedRecipeTitle = selected;
+    selectedFood = selected;
+    llmAnswerPanel.hidden = true;
+    llmAnswerText.textContent = "";
+    ragMeta.innerHTML = "";
+    syncModelFromUI();
+    updateActiveState();
+    updateResultsTitle("Recipes");
+    recipesGrid.innerHTML = "";
+    setStatus(`Loading recipes with ${niceModelLabel(currentModel)}...`);
+
+    const response = await fetchWithDeadline(
+      `/mealmap/recommend?selected=${encodeURIComponent(selected)}&profile=${encodeURIComponent(currentProfileParam())}&model=${encodeURIComponent(currentModel)}&filter_query=${encodeURIComponent(lastUserQuery)}`,
+      {},
+      120000
     );
     const data = await response.json();
     if (requestToken !== recommendRequestToken) return;
@@ -1008,7 +1100,6 @@ if (modelSelect) {
 
 filterButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    if (uiBusyCount > 0) return;
     const clickedDiet = button.dataset.diet;
     if (!clickedDiet) return;
 
@@ -1035,7 +1126,6 @@ filterButtons.forEach((button) => {
 });
 
 clearFiltersButton.addEventListener("click", () => {
-  if (uiBusyCount > 0) return;
   selectedDiets.clear();
   filterButtons.forEach((btn) => btn.classList.remove("active"));
   updateActiveState();
@@ -1056,9 +1146,28 @@ recipesGrid.addEventListener("click", (e) => {
   if (!card) return;
   const index = Number(card.dataset.index);
   const recipe = currentRecipes[index];
+  if (e.target.closest(".card-add-plan-btn")) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!recipe || planTitles.has(recipe.title || "")) return;
+    void addToPlan(recipe);
+    return;
+  }
+  if (e.target.closest(".card-open-recipe-btn")) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!recipe) return;
+    openRecipeModal(recipe);
+    return;
+  }
   if (e.target.closest(".why-chosen-btn")) {
     e.preventDefault();
     e.stopPropagation();
+    if (card.classList.contains("flipped")) {
+      card.classList.remove("flipped");
+      card.setAttribute("aria-expanded", "false");
+      return;
+    }
     card.classList.add("flipped");
     card.setAttribute("aria-expanded", "true");
     void loadCardWhyExplain(card, recipe);
@@ -1072,14 +1181,12 @@ recipesGrid.addEventListener("click", (e) => {
     return;
   }
   if (card.classList.contains("flipped")) return;
-  if (!recipe) return;
-  openRecipeModal(recipe);
 });
 
 recipesGrid.addEventListener("keydown", (e) => {
   const card = e.target.closest(".recipe-flip-card");
   if (!card || card.classList.contains("flipped")) return;
-  if (e.target.closest(".why-chosen-btn")) return;
+  if (e.target.closest(".why-chosen-btn") || e.target.closest(".card-actions")) return;
   if (e.key !== "Enter" && e.key !== " ") return;
   e.preventDefault();
   const index = Number(card.dataset.index);
