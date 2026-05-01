@@ -710,6 +710,12 @@ select {
   cursor: default;
 }
 
+.card-add-plan-btn:disabled,
+.add-to-plan-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .flip-back-btn {
   align-self: flex-start;
   margin-bottom: 4px;

@@ -211,11 +211,20 @@ function setSummaryPause(isPaused) {
   filterButtons.forEach((button) => {
     button.disabled = disabled;
   });
+  document.querySelectorAll(".card-add-plan-btn").forEach((button) => {
+    button.disabled = disabled;
+    button.title = disabled ? "Add to plan is disabled while summary is generating." : "";
+  });
+  const modalAddBtn = document.getElementById("modalAddToPlanBtn");
+  if (modalAddBtn) {
+    modalAddBtn.disabled = disabled;
+    modalAddBtn.title = disabled ? "Add to plan is disabled while summary is generating." : "";
+  }
   if (summaryPauseBanner) summaryPauseBanner.classList.toggle("hidden", !disabled);
   if (searchCard) searchCard.classList.toggle("search-controls-paused", disabled);
   if (disabled) {
     hideMatchDropdown();
-    setStatus("Search and filters are paused while your summary is being generated.");
+    setStatus("Search, filters, and Add to plan are paused while your summary is being generated.");
   }
 }
 
@@ -820,6 +829,11 @@ function renderShoppingList() {
 }
 
 async function addToPlan(recipe) {
+  if (summaryPauseActive) {
+    setStatus("Add to plan is disabled while the summary is being generated.");
+    return;
+  }
+
   const res = await fetch("/mealplan/add", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -830,7 +844,6 @@ async function addToPlan(recipe) {
     }),
   });
   const data = await res.json();
-
   planTitles = new Set(data.plan.map((r) => r.title));
   updatePlanBadge();
 
