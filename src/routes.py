@@ -631,23 +631,26 @@ def retrieve_candidates(query, model_name, top_k=250):
     result = DF.copy()
     result["tfidf_score"] = tfidf_scores * 100.0
     result["model_score"] = model_scores * 100.0
-    result["lexical_bonus"] = result.apply(lambda row: lexical_overlap_bonus(cleaned_query, row), axis=1)
-    result["similarity_score"] = (
-        result["model_score"] * 0.80
-        + result["lexical_bonus"] * 0.20
+    lex_pool = min(len(result), max(600, int(top_k) * 4))
+    slim = result.nlargest(lex_pool, "model_score").copy()
+    slim["lexical_bonus"] = slim.apply(
+        lambda row: lexical_overlap_bonus(cleaned_query, row), axis=1
+    )
+    slim["similarity_score"] = (
+        slim["model_score"] * 0.80 + slim["lexical_bonus"] * 0.20
     ).round(1)
-    result["retrieval_method"] = retrieval_method
+    slim["retrieval_method"] = retrieval_method
 
-    result = result.sort_values(
+    slim = slim.sort_values(
         ["similarity_score", "model_score", "tfidf_score"],
         ascending=[False, False, False],
     )
 
     threshold = 8.0 if retrieval_method == "svd" else 5.0
-    filtered = result[result["similarity_score"] >= threshold].copy()
+    filtered = slim[slim["similarity_score"] >= threshold].copy()
 
     if filtered.empty:
-        filtered = result.head(top_k).copy()
+        filtered = slim.head(top_k).copy()
     else:
         filtered = filtered.head(top_k).copy()
 
@@ -1288,12 +1291,11 @@ def mealmap_chat_search():
 
     skip_llm = bool(data.get("skip_llm_refinement"))
     cached_rq = str(data.get("refined_query_cached", "")).strip()[:2000]
-    cached_model = str(data.get("model_cached", "")).strip().lower()
 
-    if skip_llm and cached_rq and cached_model in {"tfidf", "svd"}:
+    if skip_llm and cached_rq:
         refined_query = cached_rq
-        refined_model = cached_model
-        refine_reason = "Reused last refinement (filters only)."
+        refined_model = model_name
+        refine_reason = "Reused last refinement."
         if len(user_profiles) >= 2:
             final_profiles = user_profiles
         elif user_profiles:

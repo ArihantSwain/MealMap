@@ -18,9 +18,6 @@ let lastUserQuery = "";
 let retrievalExplainQuery = "";
 let lastSearchRefinement = null;
 let summaryRenderedForRefinement = null;
-let dietRefetchTimer = null;
-let dietRecommendTimer = null;
-const DIET_REFETCH_DEBOUNCE_MS = 400;
 let uiBusyCount = 0;
 let ragRequestToken = 0;
 let ragFlowAbortController = null;
@@ -189,29 +186,6 @@ function setUiBusy(isBusy) {
   if (searchButton) searchButton.disabled = disabled;
 }
 
-function fetchWithDeadline(resource, init = {}, deadlineMs = 120000) {
-  const ctrl = new AbortController();
-  const tid = setTimeout(() => ctrl.abort(), deadlineMs);
-  const parentSignal = init && init.signal;
-  if (parentSignal) {
-    if (parentSignal.aborted) {
-      clearTimeout(tid);
-      ctrl.abort();
-    } else {
-      parentSignal.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(tid);
-          ctrl.abort();
-        },
-        { once: true }
-      );
-    }
-  }
-  const { signal: _omitSignal, ...restInit } = init || {};
-  return fetch(resource, { ...restInit, signal: ctrl.signal }).finally(() => clearTimeout(tid));
-}
-
 function beginBusy() {
   uiBusyCount += 1;
   setUiBusy(true);
@@ -301,7 +275,7 @@ function resetQueryBreakdownToEmpty() {
   if (queryBreakdownBadge) queryBreakdownBadge.textContent = "—";
 }
 
-async function updateQueryBreakdownPanel(queryText) {
+async function updateQueryBreakdownPanel(queryText, signal) {
   if (!queryBreakdownBody || !queryRadarMount || !queryBreakdownEmpty) return;
   const q = (queryText || "").trim();
   if (!q) {
@@ -309,7 +283,9 @@ async function updateQueryBreakdownPanel(queryText) {
     return;
   }
   try {
-    const res = await fetch(`/mealmap/svd-explain?query=${encodeURIComponent(q)}`);
+    const res = await fetch(`/mealmap/svd-explain?query=${encodeURIComponent(q)}`, {
+      signal: signal || undefined
+    });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "SVD explain failed");
     if (queryBreakdownBadge) {
@@ -875,27 +851,7 @@ async function fetchMeta() {
   }
 }
 
-function scheduleRagRefetchForDietChange() {
-  if (!lastUserQuery.trim()) return;
-  clearTimeout(dietRefetchTimer);
-  resultsTitle.textContent = "Thinking...";
-  dietRefetchTimer = setTimeout(() => {
-    dietRefetchTimer = null;
-    fetchRagAnswer(lastUserQuery);
-  }, DIET_REFETCH_DEBOUNCE_MS);
-}
-
-function scheduleRecommendRefetchForDietChange() {
-  if (!selectedRecipeTitle) return;
-  clearTimeout(dietRecommendTimer);
-  dietRecommendTimer = setTimeout(() => {
-    dietRecommendTimer = null;
-    fetchRecommendations(selectedRecipeTitle);
-  }, DIET_REFETCH_DEBOUNCE_MS);
-}
-
-async function fetchRagAnswer(query, opts = {}) {
-  const forceRefinement = opts.forceRefinement === true;
+async function fetchRagAnswer(query) {
   const cleanQuery = (query || "").trim();
   if (!cleanQuery) {
     setStatus("Type a dish before searching.", true);
@@ -910,17 +866,12 @@ async function fetchRagAnswer(query, opts = {}) {
     beginBusy();
     syncModelFromUI();
     const canReuse =
-      !forceRefinement &&
       lastSearchRefinement &&
       lastSearchRefinement.original_message === cleanQuery &&
-      (lastSearchRefinement.model_used || currentModel) === currentModel &&
       String(lastSearchRefinement.refined_query || "").trim();
 
-    if (forceRefinement) {
-      summaryRenderedForRefinement = null;
-    }
-
     if (!canReuse) {
+      summaryRenderedForRefinement = null;
       llmAnswerPanel.hidden = true;
       llmAnswerText.innerHTML = "";
       ragMeta.innerHTML = "";
@@ -939,21 +890,16 @@ async function fetchRagAnswer(query, opts = {}) {
     if (canReuse) {
       searchBody.skip_llm_refinement = true;
       searchBody.refined_query_cached = lastSearchRefinement.refined_query;
-      searchBody.model_cached = lastSearchRefinement.model_used;
     }
 
-    const searchResponse = await fetchWithDeadline(
-      "/mealmap/chat-search",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(searchBody),
-        signal: ragFlowSignal
+    const searchResponse = await fetch("/mealmap/chat-search", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
       },
-      120000
-    );
+      body: JSON.stringify(searchBody),
+      signal: ragFlowSignal
+    });
 
     const data = await searchResponse.json();
     if (requestToken !== ragRequestToken) return;
@@ -967,11 +913,13 @@ async function fetchRagAnswer(query, opts = {}) {
     }
 
     const refinedForSummary = (data.refined_query || "").trim();
+    const retrievalModelNow = data.model_used || currentModel;
     const skipSummaryFetch =
       canReuse &&
       summaryRenderedForRefinement &&
       summaryRenderedForRefinement.original_message === cleanQuery &&
-      summaryRenderedForRefinement.refined_query === refinedForSummary;
+      summaryRenderedForRefinement.refined_query === refinedForSummary &&
+      summaryRenderedForRefinement.retrieval_model === retrievalModelNow;
 
     selectedFood = data.refined_query || cleanQuery;
     selectedRecipeTitle = "";
@@ -989,7 +937,7 @@ async function fetchRagAnswer(query, opts = {}) {
       refined_query: data.refined_query || cleanQuery,
       model_used: data.model_used || currentModel
     };
-    void updateQueryBreakdownPanel(retrievalExplainQuery);
+    void updateQueryBreakdownPanel(retrievalExplainQuery, ragFlowSignal);
     hideMatchDropdown();
     setStatus(`Showing retrieved recipes for refined query: ${data.refined_query}`);
 
@@ -998,22 +946,18 @@ async function fetchRagAnswer(query, opts = {}) {
       llmAnswerPanel.hidden = false;
     } else {
       showSummaryPending(data);
-      const summaryResponse = await fetchWithDeadline(
-        "/mealmap/chat-summary",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            original_query: data.original_query || cleanQuery,
-            refined_query: data.refined_query || cleanQuery,
-            matches: data.matches || []
-          }),
-          signal: ragFlowSignal
+      const summaryResponse = await fetch("/mealmap/chat-summary", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
         },
-        120000
-      );
+        body: JSON.stringify({
+          original_query: data.original_query || cleanQuery,
+          refined_query: data.refined_query || cleanQuery,
+          matches: data.matches || []
+        }),
+        signal: ragFlowSignal
+      });
 
       const summaryData = await summaryResponse.json();
       if (requestToken !== ragRequestToken) return;
@@ -1028,7 +972,8 @@ async function fetchRagAnswer(query, opts = {}) {
       if (!llmAnswerPanel.hidden && String(mergedAnswer.answer || "").trim()) {
         summaryRenderedForRefinement = {
           original_message: cleanQuery,
-          refined_query: refinedForSummary
+          refined_query: refinedForSummary,
+          retrieval_model: retrievalModelNow
         };
       } else {
         summaryRenderedForRefinement = null;
@@ -1093,10 +1038,9 @@ async function fetchRecommendations(selected) {
     recipesGrid.innerHTML = "";
     setStatus(`Loading recipes with ${niceModelLabel(currentModel)}...`);
 
-    const response = await fetchWithDeadline(
+    const response = await fetch(
       `/mealmap/recommend?selected=${encodeURIComponent(selected)}&profile=${encodeURIComponent(currentProfileParam())}&model=${encodeURIComponent(currentModel)}&filter_query=${encodeURIComponent(lastUserQuery)}`,
-      { signal: recommendFlowSignal },
-      120000
+      { signal: recommendFlowSignal }
     );
     const data = await response.json();
     if (requestToken !== recommendRequestToken) return;
@@ -1123,14 +1067,10 @@ searchButton.addEventListener("click", () => {
     return;
   }
 
-  clearTimeout(dietRefetchTimer);
-  dietRefetchTimer = null;
-  clearTimeout(dietRecommendTimer);
-  dietRecommendTimer = null;
   resultsTitle.textContent = "Thinking...";
   lastUserQuery = query;
   hideMatchDropdown();
-  fetchRagAnswer(query, { forceRefinement: true });
+  fetchRagAnswer(query);
 });
 
 searchInput.addEventListener("input", () => {
@@ -1172,14 +1112,10 @@ searchInput.addEventListener("keydown", (event) => {
       return;
     }
 
-    clearTimeout(dietRefetchTimer);
-    dietRefetchTimer = null;
-    clearTimeout(dietRecommendTimer);
-    dietRecommendTimer = null;
     resultsTitle.textContent = "Thinking...";
     lastUserQuery = query;
     hideMatchDropdown();
-    fetchRagAnswer(query, { forceRefinement: true });
+    fetchRagAnswer(query);
   }
 
   if (event.key === "Escape") {
@@ -1201,12 +1137,16 @@ if (showListingDropdown) {
 if (modelSelect) {
   modelSelect.addEventListener("change", () => {
     syncModelFromUI();
+    summaryRenderedForRefinement = null;
     updateActiveState();
 
     const query = searchInput.value.trim();
 
     if (selectedRecipeTitle) {
       fetchRecommendations(selectedRecipeTitle);
+    } else if (lastUserQuery.trim()) {
+      resultsTitle.textContent = "Thinking...";
+      fetchRagAnswer(lastUserQuery);
     } else if (query) {
       fetchMatchSuggestions(query);
     }
@@ -1229,9 +1169,10 @@ filterButtons.forEach((button) => {
     updateActiveState();
 
     if (selectedRecipeTitle) {
-      scheduleRecommendRefetchForDietChange();
+      fetchRecommendations(selectedRecipeTitle);
     } else if (lastUserQuery.trim()) {
-      scheduleRagRefetchForDietChange();
+      resultsTitle.textContent = "Thinking...";
+      fetchRagAnswer(lastUserQuery);
     } else {
       const query = searchInput.value.trim();
       if (query) fetchMatchSuggestions(query);
@@ -1245,9 +1186,10 @@ clearFiltersButton.addEventListener("click", () => {
   updateActiveState();
 
   if (selectedRecipeTitle) {
-    scheduleRecommendRefetchForDietChange();
+    fetchRecommendations(selectedRecipeTitle);
   } else if (lastUserQuery.trim()) {
-    scheduleRagRefetchForDietChange();
+    resultsTitle.textContent = "Thinking...";
+    fetchRagAnswer(lastUserQuery);
   } else {
     const query = searchInput.value.trim();
     if (query) fetchMatchSuggestions(query);
