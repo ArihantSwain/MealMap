@@ -19,30 +19,23 @@ let retrievalExplainQuery = "";
 let lastSearchRefinement = null;
 let summaryRenderedForRefinement = null;
 let uiBusyCount = 0;
+let summaryPauseActive = false;
 let ragRequestToken = 0;
 let ragFlowAbortController = null;
 let recommendRequestToken = 0;
 let recommendFlowAbortController = null;
 
-function isSupersededRagRequest(requestToken) {
+function isStaleRagRequest(requestToken) {
   return requestToken !== ragRequestToken;
 }
 
-function shouldSilenceRagFlowError(error, requestToken, signal) {
-  if (isSupersededRagRequest(requestToken)) return true;
+function shouldIgnoreRagError(error, requestToken, signal) {
+  if (isStaleRagRequest(requestToken)) return true;
   if (signal && signal.aborted) return true;
-  let e = error;
-  for (let i = 0; i < 5 && e; i++) {
-    const name = e.name;
-    if (name === "AbortError") return true;
-    if (typeof DOMException !== "undefined" && e instanceof DOMException) {
-      if (name === "AbortError" || e.code === 20) return true;
-    }
-    e = e.cause;
-  }
+  const name = String(error && error.name || "");
+  if (name === "AbortError") return true;
   const msg = String((error && error.message) || "").toLowerCase();
-  if (msg.includes("abort")) return true;
-  return false;
+  return msg.includes("abort");
 }
 
 let planTitles = new Set();
@@ -60,6 +53,8 @@ const metaPills = document.getElementById("metaPills");
 const modelSelect = document.getElementById("modelSelect");
 const matchDropdown = document.getElementById("matchDropdown");
 const showListingDropdown = document.getElementById("showListingDropdown");
+const summaryPauseBanner = document.getElementById("summaryPauseBanner");
+const searchCard = document.querySelector(".search-card");
 
 const queryBreakdownBody = document.getElementById("queryBreakdownBody");
 const queryBreakdownEmpty = document.getElementById("queryBreakdownEmpty");
@@ -201,8 +196,27 @@ function syncModelFromUI() {
 }
 
 function setUiBusy(isBusy) {
-  const disabled = Boolean(isBusy);
+  const disabled = Boolean(isBusy || summaryPauseActive);
   if (searchButton) searchButton.disabled = disabled;
+}
+
+function setSummaryPause(isPaused) {
+  summaryPauseActive = Boolean(isPaused);
+  const disabled = summaryPauseActive;
+  if (searchInput) searchInput.disabled = disabled;
+  if (searchButton) searchButton.disabled = disabled || uiBusyCount > 0;
+  if (modelSelect) modelSelect.disabled = disabled;
+  if (showListingDropdown) showListingDropdown.disabled = disabled;
+  if (clearFiltersButton) clearFiltersButton.disabled = disabled;
+  filterButtons.forEach((button) => {
+    button.disabled = disabled;
+  });
+  if (summaryPauseBanner) summaryPauseBanner.classList.toggle("hidden", !disabled);
+  if (searchCard) searchCard.classList.toggle("search-controls-paused", disabled);
+  if (disabled) {
+    hideMatchDropdown();
+    setStatus("Search and filters are paused while your summary is being generated.");
+  }
 }
 
 function beginBusy() {
@@ -883,6 +897,7 @@ async function fetchRagAnswer(query) {
   if (ragFlowAbortController) ragFlowAbortController.abort();
   ragFlowAbortController = new AbortController();
   const ragFlowSignal = ragFlowAbortController.signal;
+  setSummaryPause(false);
 
   let chatSearchPayload = null;
 
@@ -925,13 +940,13 @@ async function fetchRagAnswer(query) {
       signal: ragFlowSignal
     });
 
-    if (isSupersededRagRequest(requestToken)) {
+    if (isStaleRagRequest(requestToken)) {
       searchResponse.body?.cancel?.();
       return;
     }
 
     const data = await searchResponse.json();
-    if (isSupersededRagRequest(requestToken)) return;
+    if (isStaleRagRequest(requestToken)) return;
 
     if (!searchResponse.ok) {
       lastSearchRefinement = null;
@@ -977,7 +992,7 @@ async function fetchRagAnswer(query) {
       skipSummaryFetch
     };
   } catch (error) {
-    if (shouldSilenceRagFlowError(error, requestToken, ragFlowSignal)) return;
+    if (shouldIgnoreRagError(error, requestToken, ragFlowSignal)) return;
     lastSearchRefinement = null;
     summaryRenderedForRefinement = null;
     console.error(error);
@@ -987,17 +1002,19 @@ async function fetchRagAnswer(query) {
     endBusy();
   }
 
-  if (!chatSearchPayload || isSupersededRagRequest(requestToken)) return;
+  if (!chatSearchPayload || isStaleRagRequest(requestToken)) return;
 
   const { data, refinedForSummary, retrievalModelNow, skipSummaryFetch } = chatSearchPayload;
 
   if (skipSummaryFetch) {
+    setSummaryPause(false);
     ragMeta.innerHTML = ragMetaMarkup(data);
     llmAnswerPanel.hidden = false;
     return;
   }
 
   try {
+    setSummaryPause(true);
     showSummaryPending(data);
     const summaryResponse = await fetch("/mealmap/chat-summary", {
       method: "POST",
@@ -1012,13 +1029,13 @@ async function fetchRagAnswer(query) {
       signal: ragFlowSignal
     });
 
-    if (isSupersededRagRequest(requestToken)) {
+    if (isStaleRagRequest(requestToken)) {
       summaryResponse.body?.cancel?.();
       return;
     }
 
     const summaryData = await summaryResponse.json();
-    if (isSupersededRagRequest(requestToken)) return;
+    if (isStaleRagRequest(requestToken)) return;
     if (!summaryResponse.ok) {
       summaryRenderedForRefinement = null;
       setStatus(summaryData.error || "Could not load summary.", true);
@@ -1037,10 +1054,12 @@ async function fetchRagAnswer(query) {
       summaryRenderedForRefinement = null;
     }
   } catch (error) {
-    if (shouldSilenceRagFlowError(error, requestToken, ragFlowSignal)) return;
+    if (shouldIgnoreRagError(error, requestToken, ragFlowSignal)) return;
     summaryRenderedForRefinement = null;
     console.error(error);
     setStatus("Could not load summary.", true);
+  } finally {
+    setSummaryPause(false);
   }
 }
 

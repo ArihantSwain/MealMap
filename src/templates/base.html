@@ -75,6 +75,9 @@
             <button class="filter-btn" data-diet="balanced">Balanced</button>
             <button class="filter-btn" data-diet="bodybuilding">Bodybuilding</button>
           </div>
+          <div id="summaryPauseBanner" class="summary-pause-banner hidden" role="status" aria-live="polite">
+            Search is paused while your summary is being generated.
+          </div>
 
           <div id="queryBreakdown" class="query-breakdown" aria-live="polite">
             <div class="query-breakdown-header">
@@ -108,7 +111,7 @@
 
         <section id="llmAnswerPanel" hidden>
           <div class="results-card">
-            <h3>LLM Response:</h3>
+            <h3>Summary:</h3>
             <div id="llmAnswerText"></div>
             <div id="ragMeta" class="meta-row"></div>
           </div>
