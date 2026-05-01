@@ -17,12 +17,15 @@ let selectedRecipeTitle = "";
 let lastUserQuery = "";
 let retrievalExplainQuery = "";
 let lastSearchRefinement = null;
+let summaryRenderedForRefinement = null;
 let dietRefetchTimer = null;
 let dietRecommendTimer = null;
 const DIET_REFETCH_DEBOUNCE_MS = 400;
 let uiBusyCount = 0;
 let ragRequestToken = 0;
+let ragFlowAbortController = null;
 let recommendRequestToken = 0;
+let recommendFlowAbortController = null;
 
 let planTitles = new Set();
 let modalOpenRecipeTitle = "";
@@ -189,8 +192,24 @@ function setUiBusy(isBusy) {
 function fetchWithDeadline(resource, init = {}, deadlineMs = 120000) {
   const ctrl = new AbortController();
   const tid = setTimeout(() => ctrl.abort(), deadlineMs);
-  const merged = { ...init, signal: ctrl.signal };
-  return fetch(resource, merged).finally(() => clearTimeout(tid));
+  const parentSignal = init && init.signal;
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      clearTimeout(tid);
+      ctrl.abort();
+    } else {
+      parentSignal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(tid);
+          ctrl.abort();
+        },
+        { once: true }
+      );
+    }
+  }
+  const { signal: _omitSignal, ...restInit } = init || {};
+  return fetch(resource, { ...restInit, signal: ctrl.signal }).finally(() => clearTimeout(tid));
 }
 
 function beginBusy() {
@@ -480,8 +499,22 @@ function renderMatchDropdown(matches) {
   });
 }
 
+function ragMetaMarkup(data) {
+  const refined = data?.refined_query || "";
+  const original = data?.original_query || "";
+  const modelUsed = data?.model_used || currentModel;
+  const profileUsed = data?.profile_used || "";
+  return `
+    <span class="badge">Original: ${escapeHtml(original)}</span>
+    <span class="badge">Refined: ${escapeHtml(refined)}</span>
+    <span class="badge">${escapeHtml(niceModelLabel(modelUsed))}</span>
+    ${dietLabelList(profileUsed).map((d) => `<span class="badge">${escapeHtml(niceDietLabel(d))}</span>`).join("")}
+  `;
+}
+
 function renderRagAnswer(data) {
   if (!data || !data.answer || !String(data.answer).trim()) {
+    summaryRenderedForRefinement = null;
     llmAnswerPanel.hidden = true;
     llmAnswerText.innerHTML = "";
     ragMeta.innerHTML = "";
@@ -496,27 +529,13 @@ function renderRagAnswer(data) {
     a.setAttribute("target", "_blank");
     a.setAttribute("rel", "noopener noreferrer");
   });
-  ragMeta.innerHTML = `
-    <span class="badge">Original: ${escapeHtml(data.original_query || "")}</span>
-    <span class="badge">Refined: ${escapeHtml(data.refined_query || "")}</span>
-    <span class="badge">${escapeHtml(niceModelLabel(data.model_used || currentModel))}</span>
-    ${dietLabelList(data.profile_used).map((d) => `<span class="badge">${escapeHtml(niceDietLabel(d))}</span>`).join("")}
-  `;
+  ragMeta.innerHTML = ragMetaMarkup(data);
   llmAnswerPanel.hidden = false;
 }
 
 function showSummaryPending(data) {
-  const refined = data?.refined_query || "";
-  const original = data?.original_query || "";
-  const modelUsed = data?.model_used || currentModel;
-  const profileUsed = data?.profile_used || "";
   llmAnswerText.textContent = "Writing a summary...";
-  ragMeta.innerHTML = `
-    <span class="badge">Original: ${escapeHtml(original)}</span>
-    <span class="badge">Refined: ${escapeHtml(refined)}</span>
-    <span class="badge">${escapeHtml(niceModelLabel(modelUsed))}</span>
-    ${dietLabelList(profileUsed).map((d) => `<span class="badge">${escapeHtml(niceDietLabel(d))}</span>`).join("")}
-  `;
+  ragMeta.innerHTML = ragMetaMarkup(data);
   llmAnswerPanel.hidden = false;
 }
 
@@ -883,13 +902,12 @@ async function fetchRagAnswer(query, opts = {}) {
     return;
   }
   const requestToken = ++ragRequestToken;
+  if (ragFlowAbortController) ragFlowAbortController.abort();
+  ragFlowAbortController = new AbortController();
+  const ragFlowSignal = ragFlowAbortController.signal;
 
   try {
     beginBusy();
-    llmAnswerPanel.hidden = true;
-    llmAnswerText.innerHTML = "";
-    ragMeta.innerHTML = "";
-    recipesGrid.innerHTML = "";
     syncModelFromUI();
     const canReuse =
       !forceRefinement &&
@@ -897,6 +915,18 @@ async function fetchRagAnswer(query, opts = {}) {
       lastSearchRefinement.original_message === cleanQuery &&
       (lastSearchRefinement.model_used || currentModel) === currentModel &&
       String(lastSearchRefinement.refined_query || "").trim();
+
+    if (forceRefinement) {
+      summaryRenderedForRefinement = null;
+    }
+
+    if (!canReuse) {
+      llmAnswerPanel.hidden = true;
+      llmAnswerText.innerHTML = "";
+      ragMeta.innerHTML = "";
+    }
+
+    recipesGrid.innerHTML = "";
     setStatus(
       canReuse ? "Updating results for your filters…" : "Refining query and retrieving recipes..."
     );
@@ -919,7 +949,8 @@ async function fetchRagAnswer(query, opts = {}) {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify(searchBody)
+        body: JSON.stringify(searchBody),
+        signal: ragFlowSignal
       },
       120000
     );
@@ -929,10 +960,18 @@ async function fetchRagAnswer(query, opts = {}) {
 
     if (!searchResponse.ok) {
       lastSearchRefinement = null;
+      summaryRenderedForRefinement = null;
       setStatus(data.error || "Could not load RAG response.", true);
       updateResultsTitle();
       return;
     }
+
+    const refinedForSummary = (data.refined_query || "").trim();
+    const skipSummaryFetch =
+      canReuse &&
+      summaryRenderedForRefinement &&
+      summaryRenderedForRefinement.original_message === cleanQuery &&
+      summaryRenderedForRefinement.refined_query === refinedForSummary;
 
     selectedFood = data.refined_query || cleanQuery;
     selectedRecipeTitle = "";
@@ -950,38 +989,56 @@ async function fetchRagAnswer(query, opts = {}) {
       refined_query: data.refined_query || cleanQuery,
       model_used: data.model_used || currentModel
     };
-    showSummaryPending(data);
     void updateQueryBreakdownPanel(retrievalExplainQuery);
     hideMatchDropdown();
     setStatus(`Showing retrieved recipes for refined query: ${data.refined_query}`);
 
-    const summaryResponse = await fetchWithDeadline(
-      "/mealmap/chat-summary",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
+    if (skipSummaryFetch) {
+      ragMeta.innerHTML = ragMetaMarkup(data);
+      llmAnswerPanel.hidden = false;
+    } else {
+      showSummaryPending(data);
+      const summaryResponse = await fetchWithDeadline(
+        "/mealmap/chat-summary",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            original_query: data.original_query || cleanQuery,
+            refined_query: data.refined_query || cleanQuery,
+            matches: data.matches || []
+          }),
+          signal: ragFlowSignal
         },
-        body: JSON.stringify({
-          original_query: data.original_query || cleanQuery,
-          refined_query: data.refined_query || cleanQuery,
-          matches: data.matches || []
-        })
-      },
-      120000
-    );
+        120000
+      );
 
-    const summaryData = await summaryResponse.json();
-    if (requestToken !== ragRequestToken) return;
-    if (!summaryResponse.ok) {
-      setStatus(summaryData.error || "Could not load summary.", true);
-      return;
+      const summaryData = await summaryResponse.json();
+      if (requestToken !== ragRequestToken) return;
+      if (!summaryResponse.ok) {
+        summaryRenderedForRefinement = null;
+        setStatus(summaryData.error || "Could not load summary.", true);
+        return;
+      }
+
+      const mergedAnswer = { ...data, answer: summaryData.answer || "" };
+      renderRagAnswer(mergedAnswer);
+      if (!llmAnswerPanel.hidden && String(mergedAnswer.answer || "").trim()) {
+        summaryRenderedForRefinement = {
+          original_message: cleanQuery,
+          refined_query: refinedForSummary
+        };
+      } else {
+        summaryRenderedForRefinement = null;
+      }
     }
-
-    renderRagAnswer({ ...data, answer: summaryData.answer || "" });
   } catch (error) {
     if (requestToken !== ragRequestToken) return;
+    if (error && error.name === "AbortError") return;
     lastSearchRefinement = null;
+    summaryRenderedForRefinement = null;
     console.error(error);
     setStatus("Could not load RAG response.", true);
     updateResultsTitle();
@@ -1019,6 +1076,9 @@ async function fetchMatchSuggestions(query) {
 
 async function fetchRecommendations(selected) {
   const requestToken = ++recommendRequestToken;
+  if (recommendFlowAbortController) recommendFlowAbortController.abort();
+  recommendFlowAbortController = new AbortController();
+  const recommendFlowSignal = recommendFlowAbortController.signal;
 
   try {
     beginBusy();
@@ -1035,7 +1095,7 @@ async function fetchRecommendations(selected) {
 
     const response = await fetchWithDeadline(
       `/mealmap/recommend?selected=${encodeURIComponent(selected)}&profile=${encodeURIComponent(currentProfileParam())}&model=${encodeURIComponent(currentModel)}&filter_query=${encodeURIComponent(lastUserQuery)}`,
-      {},
+      { signal: recommendFlowSignal },
       120000
     );
     const data = await response.json();
@@ -1046,6 +1106,7 @@ async function fetchRecommendations(selected) {
     void updateQueryBreakdownPanel(retrievalExplainQuery);
   } catch (error) {
     if (requestToken !== recommendRequestToken) return;
+    if (error && error.name === "AbortError") return;
     console.error(error);
     setStatus("Could not load recipes.", true);
   } finally {
