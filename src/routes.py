@@ -27,6 +27,9 @@ SEARCH_LIMIT = 12
 RECOMMEND_LIMIT = 24
 DEFAULT_MODEL = "tfidf"
 SVD_RADAR_DIMS = 6
+SVD_VARIANCE_TARGET = 0.68
+SVD_COMPONENTS_CAP = 40
+SVD_PROBE_K_MAX = 100
 VALID_PROFILES = {
     "high_protein", "low_carb", "keto", "low_calorie",
     "low_fat", "low_sodium", "balanced", "bodybuilding",
@@ -365,15 +368,17 @@ def ensure_models_loaded():
     RECOMMEND_TFIDF_MATRIX = RECOMMEND_TFIDF_VECTORIZER.fit_transform(DF["recommendation_text"])
 
     if RECOMMEND_TFIDF_MATRIX.shape[1] > 2 and RECOMMEND_TFIDF_MATRIX.shape[0] > 2:
+        rec_nf = RECOMMEND_TFIDF_MATRIX.shape[1]
         recommend_probe_k = max(
             2,
-            min(300, RECOMMEND_TFIDF_MATRIX.shape[0] - 1, RECOMMEND_TFIDF_MATRIX.shape[1] - 1),
+            min(SVD_PROBE_K_MAX, RECOMMEND_TFIDF_MATRIX.shape[0] - 1, rec_nf - 1),
         )
         recommend_probe_model = TruncatedSVD(n_components=recommend_probe_k, random_state=42)
         recommend_probe_model.fit(RECOMMEND_TFIDF_MATRIX)
 
         recommend_cumvar = np.cumsum(recommend_probe_model.explained_variance_ratio_)
-        RECOMMEND_SVD_COMPONENTS = max(2, int(np.searchsorted(recommend_cumvar, 0.80)) + 1)
+        rec_k = max(2, int(np.searchsorted(recommend_cumvar, SVD_VARIANCE_TARGET)) + 1)
+        RECOMMEND_SVD_COMPONENTS = int(min(rec_k, SVD_COMPONENTS_CAP, rec_nf - 1))
 
         RECOMMEND_SVD_MODEL = TruncatedSVD(n_components=RECOMMEND_SVD_COMPONENTS, random_state=42)
         RECOMMEND_SVD_MATRIX = normalize(RECOMMEND_SVD_MODEL.fit_transform(RECOMMEND_TFIDF_MATRIX))
@@ -385,12 +390,14 @@ def ensure_models_loaded():
         RECOMMEND_SVD_VARIANCE = 0.0
 
     if TFIDF_MATRIX.shape[1] > 2 and TFIDF_MATRIX.shape[0] > 2:
-        probe_k = max(2, min(300, TFIDF_MATRIX.shape[0] - 1, TFIDF_MATRIX.shape[1] - 1))
+        n_features = TFIDF_MATRIX.shape[1]
+        probe_k = max(2, min(SVD_PROBE_K_MAX, TFIDF_MATRIX.shape[0] - 1, n_features - 1))
         probe_model = TruncatedSVD(n_components=probe_k, random_state=42)
         probe_model.fit(TFIDF_MATRIX)
 
         cumvar = np.cumsum(probe_model.explained_variance_ratio_)
-        SVD_COMPONENTS = max(2, int(np.searchsorted(cumvar, 0.80)) + 1)
+        k_from_var = max(2, int(np.searchsorted(cumvar, SVD_VARIANCE_TARGET)) + 1)
+        SVD_COMPONENTS = int(min(k_from_var, SVD_COMPONENTS_CAP, n_features - 1))
 
         SVD_MODEL = TruncatedSVD(n_components=SVD_COMPONENTS, random_state=42)
         SVD_MATRIX = normalize(SVD_MODEL.fit_transform(TFIDF_MATRIX))
