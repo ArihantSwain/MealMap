@@ -16,6 +16,10 @@ let autocompleteTimer = null;
 let selectedRecipeTitle = "";
 let lastUserQuery = "";
 let retrievalExplainQuery = "";
+let lastSearchRefinement = null;
+let dietRefetchTimer = null;
+let dietRecommendTimer = null;
+const DIET_REFETCH_DEBOUNCE_MS = 400;
 let uiBusyCount = 0;
 let ragRequestToken = 0;
 let recommendRequestToken = 0;
@@ -852,7 +856,27 @@ async function fetchMeta() {
   }
 }
 
-async function fetchRagAnswer(query) {
+function scheduleRagRefetchForDietChange() {
+  if (!lastUserQuery.trim()) return;
+  clearTimeout(dietRefetchTimer);
+  resultsTitle.textContent = "Thinking...";
+  dietRefetchTimer = setTimeout(() => {
+    dietRefetchTimer = null;
+    fetchRagAnswer(lastUserQuery);
+  }, DIET_REFETCH_DEBOUNCE_MS);
+}
+
+function scheduleRecommendRefetchForDietChange() {
+  if (!selectedRecipeTitle) return;
+  clearTimeout(dietRecommendTimer);
+  dietRecommendTimer = setTimeout(() => {
+    dietRecommendTimer = null;
+    fetchRecommendations(selectedRecipeTitle);
+  }, DIET_REFETCH_DEBOUNCE_MS);
+}
+
+async function fetchRagAnswer(query, opts = {}) {
+  const forceRefinement = opts.forceRefinement === true;
   const cleanQuery = (query || "").trim();
   if (!cleanQuery) {
     setStatus("Type a dish before searching.", true);
@@ -866,8 +890,27 @@ async function fetchRagAnswer(query) {
     llmAnswerText.innerHTML = "";
     ragMeta.innerHTML = "";
     recipesGrid.innerHTML = "";
-    setStatus("Refining query and retrieving recipes...");
     syncModelFromUI();
+    const canReuse =
+      !forceRefinement &&
+      lastSearchRefinement &&
+      lastSearchRefinement.original_message === cleanQuery &&
+      (lastSearchRefinement.model_used || currentModel) === currentModel &&
+      String(lastSearchRefinement.refined_query || "").trim();
+    setStatus(
+      canReuse ? "Updating results for your filters…" : "Refining query and retrieving recipes..."
+    );
+
+    const searchBody = {
+      message: cleanQuery,
+      profile: currentProfileParam(),
+      model: currentModel
+    };
+    if (canReuse) {
+      searchBody.skip_llm_refinement = true;
+      searchBody.refined_query_cached = lastSearchRefinement.refined_query;
+      searchBody.model_cached = lastSearchRefinement.model_used;
+    }
 
     const searchResponse = await fetchWithDeadline(
       "/mealmap/chat-search",
@@ -876,11 +919,7 @@ async function fetchRagAnswer(query) {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          message: cleanQuery,
-          profile: currentProfileParam(),
-          model: currentModel
-        })
+        body: JSON.stringify(searchBody)
       },
       120000
     );
@@ -889,6 +928,7 @@ async function fetchRagAnswer(query) {
     if (requestToken !== ragRequestToken) return;
 
     if (!searchResponse.ok) {
+      lastSearchRefinement = null;
       setStatus(data.error || "Could not load RAG response.", true);
       updateResultsTitle();
       return;
@@ -905,6 +945,11 @@ async function fetchRagAnswer(query) {
     updateActiveState();
     updateResultsTitle("Matches");
     renderRecipes(data.matches || []);
+    lastSearchRefinement = {
+      original_message: cleanQuery,
+      refined_query: data.refined_query || cleanQuery,
+      model_used: data.model_used || currentModel
+    };
     showSummaryPending(data);
     void updateQueryBreakdownPanel(retrievalExplainQuery);
     hideMatchDropdown();
@@ -936,6 +981,7 @@ async function fetchRagAnswer(query) {
     renderRagAnswer({ ...data, answer: summaryData.answer || "" });
   } catch (error) {
     if (requestToken !== ragRequestToken) return;
+    lastSearchRefinement = null;
     console.error(error);
     setStatus("Could not load RAG response.", true);
     updateResultsTitle();
@@ -1016,10 +1062,14 @@ searchButton.addEventListener("click", () => {
     return;
   }
 
+  clearTimeout(dietRefetchTimer);
+  dietRefetchTimer = null;
+  clearTimeout(dietRecommendTimer);
+  dietRecommendTimer = null;
   resultsTitle.textContent = "Thinking...";
   lastUserQuery = query;
   hideMatchDropdown();
-  fetchRagAnswer(query);
+  fetchRagAnswer(query, { forceRefinement: true });
 });
 
 searchInput.addEventListener("input", () => {
@@ -1061,10 +1111,14 @@ searchInput.addEventListener("keydown", (event) => {
       return;
     }
 
+    clearTimeout(dietRefetchTimer);
+    dietRefetchTimer = null;
+    clearTimeout(dietRecommendTimer);
+    dietRecommendTimer = null;
     resultsTitle.textContent = "Thinking...";
     lastUserQuery = query;
     hideMatchDropdown();
-    fetchRagAnswer(query);
+    fetchRagAnswer(query, { forceRefinement: true });
   }
 
   if (event.key === "Escape") {
@@ -1114,10 +1168,9 @@ filterButtons.forEach((button) => {
     updateActiveState();
 
     if (selectedRecipeTitle) {
-      fetchRecommendations(selectedRecipeTitle);
+      scheduleRecommendRefetchForDietChange();
     } else if (lastUserQuery.trim()) {
-      resultsTitle.textContent = "Thinking...";
-      fetchRagAnswer(lastUserQuery);
+      scheduleRagRefetchForDietChange();
     } else {
       const query = searchInput.value.trim();
       if (query) fetchMatchSuggestions(query);
@@ -1131,10 +1184,9 @@ clearFiltersButton.addEventListener("click", () => {
   updateActiveState();
 
   if (selectedRecipeTitle) {
-    fetchRecommendations(selectedRecipeTitle);
+    scheduleRecommendRefetchForDietChange();
   } else if (lastUserQuery.trim()) {
-    resultsTitle.textContent = "Thinking...";
-    fetchRagAnswer(lastUserQuery);
+    scheduleRagRefetchForDietChange();
   } else {
     const query = searchInput.value.trim();
     if (query) fetchMatchSuggestions(query);

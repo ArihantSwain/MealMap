@@ -1286,28 +1286,44 @@ def mealmap_chat_search():
     if model_name not in {"tfidf", "svd"}:
         model_name = DEFAULT_MODEL
 
-    api_key = os.getenv("SPARK_API_KEY")
-    if not api_key:
-        return jsonify({"error": "API_KEY not set"}), 500
+    skip_llm = bool(data.get("skip_llm_refinement"))
+    cached_rq = str(data.get("refined_query_cached", "")).strip()[:2000]
+    cached_model = str(data.get("model_cached", "")).strip().lower()
 
-    client = LLMClient(api_key=api_key)
-    llm_profile_hint = user_profiles[0] if user_profiles else "none"
-    refinement = llm_refine_mealmap_query(
-        client,
-        user_message,
-        current_profile=llm_profile_hint,
-        current_model=model_name,
-    )
-
-    refined_query = refinement["refined_query"]
-    refined_model = refinement["model"]
-
-    if len(user_profiles) >= 2:
-        final_profiles = user_profiles
-    elif user_profiles:
-        final_profiles = parse_profiles_arg(refinement["profile"]) or user_profiles
+    if skip_llm and cached_rq and cached_model in {"tfidf", "svd"}:
+        refined_query = cached_rq
+        refined_model = cached_model
+        refine_reason = "Reused last refinement (filters only)."
+        if len(user_profiles) >= 2:
+            final_profiles = user_profiles
+        elif user_profiles:
+            final_profiles = user_profiles
+        else:
+            final_profiles = []
     else:
-        final_profiles = parse_profiles_arg(refinement["profile"])
+        api_key = os.getenv("SPARK_API_KEY")
+        if not api_key:
+            return jsonify({"error": "API_KEY not set"}), 500
+
+        client = LLMClient(api_key=api_key)
+        llm_profile_hint = user_profiles[0] if user_profiles else "none"
+        refinement = llm_refine_mealmap_query(
+            client,
+            user_message,
+            current_profile=llm_profile_hint,
+            current_model=model_name,
+        )
+
+        refined_query = refinement["refined_query"]
+        refined_model = refinement["model"]
+        refine_reason = refinement["reason"]
+
+        if len(user_profiles) >= 2:
+            final_profiles = user_profiles
+        elif user_profiles:
+            final_profiles = parse_profiles_arg(refinement["profile"]) or user_profiles
+        else:
+            final_profiles = parse_profiles_arg(refinement["profile"])
 
     profile_param = ",".join(final_profiles) if final_profiles else "none"
 
@@ -1319,7 +1335,7 @@ def mealmap_chat_search():
         {
             "original_query": user_message,
             "refined_query": refined_query,
-            "refinement_reason": refinement["reason"],
+            "refinement_reason": refine_reason,
             "profile_used": profile_param,
             "model_used": refined_model,
             "matches": payload,
