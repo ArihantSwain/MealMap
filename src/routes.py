@@ -1230,9 +1230,6 @@ def mealmap_chat():
 
     client = LLMClient(api_key=api_key)
 
-    # The LLM refiner expects a single profile. Pass the first one; if the user
-    # has multi-selected, we use their selection verbatim for sorting and
-    # ignore the LLM's profile suggestion.
     llm_profile_hint = user_profiles[0] if user_profiles else "none"
     refinement = llm_refine_mealmap_query(
         client,

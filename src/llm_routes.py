@@ -88,9 +88,7 @@ def register_chat_route(app, json_search):
                 yield f"data: {json.dumps({'error': 'Streaming error occurred'})}\n\n"
 
         return Response(
-            # Stream the response to the client ("stream_with_context" is from Flask)
             stream_with_context(generate()),
             mimetype="text/event-stream",
-            # Set this to prevent the browser from caching the response
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )

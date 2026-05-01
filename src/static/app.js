@@ -24,6 +24,27 @@ let ragFlowAbortController = null;
 let recommendRequestToken = 0;
 let recommendFlowAbortController = null;
 
+function isSupersededRagRequest(requestToken) {
+  return requestToken !== ragRequestToken;
+}
+
+function shouldSilenceRagFlowError(error, requestToken, signal) {
+  if (isSupersededRagRequest(requestToken)) return true;
+  if (signal && signal.aborted) return true;
+  let e = error;
+  for (let i = 0; i < 5 && e; i++) {
+    const name = e.name;
+    if (name === "AbortError") return true;
+    if (typeof DOMException !== "undefined" && e instanceof DOMException) {
+      if (name === "AbortError" || e.code === 20) return true;
+    }
+    e = e.cause;
+  }
+  const msg = String((error && error.message) || "").toLowerCase();
+  if (msg.includes("abort")) return true;
+  return false;
+}
+
 let planTitles = new Set();
 let modalOpenRecipeTitle = "";
 
@@ -63,8 +84,6 @@ const closeDrawerBtn = document.getElementById("closeDrawerBtn");
 const drawerBody = document.getElementById("drawerBody");
 const drawerFooter = document.getElementById("drawerFooter");
 const drawerSubtitle = document.getElementById("drawerSubtitle");
-
-// ── Utilities ────────────────────────────────────────────────────────────────
 
 function setStatus(message, isError = false) {
   statusMessage.textContent = message;
@@ -328,6 +347,12 @@ async function updateQueryBreakdownPanel(queryText) {
   }
 }
 
+function whyChosenScoreLine(recipe) {
+  const score = Number(recipe?.tfidf_score ?? recipe?.similarity_score ?? 0);
+  if (!Number.isFinite(score) || score <= 0) return "";
+  return `Retrieval score (TF‑IDF): ${score.toFixed(1)}. `;
+}
+
 async function loadCardWhyExplain(card, recipe) {
   const explainEl = card.querySelector(".why-explain");
   const mount = card.querySelector(".card-radar-mount");
@@ -336,12 +361,13 @@ async function loadCardWhyExplain(card, recipe) {
   fillWhyTagGlosses(card, recipe);
   const title = recipe?.title || "";
   const q =
-    retrievalExplainQuery.trim() || lastUserQuery.trim() || searchInput.value.trim();
+    (searchInput && searchInput.value ? searchInput.value.trim() : "") ||
+    lastUserQuery.trim() ||
+    retrievalExplainQuery.trim();
   const isTfidf = currentModel === "tfidf";
   if (kickerEl) {
     kickerEl.textContent = isTfidf ? "Why this matched (TF-IDF)" : "Latent dimensions";
   }
-  explainEl.textContent = "Loading…";
   mount.innerHTML = "";
   if (!q || !title) {
     explainEl.textContent = "Run a search first so we can compare your retrieval text to this recipe.";
@@ -349,14 +375,16 @@ async function loadCardWhyExplain(card, recipe) {
   }
 
   const tfidfFallback = () => {
-    const score = Number(recipe?.tfidf_score ?? recipe?.similarity_score ?? 0);
-    const scoreLine = Number.isFinite(score) && score > 0
-      ? `TF-IDF score: ${score.toFixed(1)}. `
-      : "";
+    const scoreLine = whyChosenScoreLine(recipe);
     explainEl.textContent =
       `${scoreLine}This recipe was ranked by overlap between your query terms and the recipe's title, ingredients, and ` +
       `tags — higher overlap on rarer terms means a higher score. Switch to SVD for a topic-space view.`;
   };
+
+  {
+    const scoreLine = whyChosenScoreLine(recipe);
+    explainEl.textContent = `${scoreLine}Loading topic chart…`;
+  }
 
   try {
     const res = await fetch(
@@ -399,8 +427,6 @@ async function loadCardWhyExplain(card, recipe) {
     }
   }
 }
-
-// ── Search UI ─────────────────────────────────────────────────────────────────
 
 function updateActiveState() {
   const pieces = [];
@@ -522,8 +548,6 @@ function showSummaryPending(data) {
   llmAnswerPanel.hidden = false;
 }
 
-// ── Recipe cards ──────────────────────────────────────────────────────────────
-
 function recipeCard(recipe, index) {
   const title = recipe.title || "Untitled Recipe";
   const inPlan = planTitles.has(recipe.title || "");
@@ -560,7 +584,7 @@ function recipeCard(recipe, index) {
           <button type="button" class="flip-back-btn">← Back to recipe</button>
           <div class="why-tag-glosses"></div>
           <p class="latent-kicker">Latent dimensions</p>
-          <p class="why-explain">Loading explanation...</p>
+          <p class="why-explain"></p>
           <div class="card-radar-wrap">
             <div class="card-radar-mount" aria-label="Recipe topic radar"></div>
           </div>
@@ -582,8 +606,6 @@ function renderRecipes(recipes) {
   recipesGrid.innerHTML = recipes.map((recipe, index) => recipeCard(recipe, index)).join("");
   setStatus(`Showing ${recipes.length} recipes using ${niceModelLabel(currentModel)}.`);
 }
-
-// ── Recipe modal ──────────────────────────────────────────────────────────────
 
 function listMarkup(items, ordered = false) {
   const cleanItems = normalizeList(items);
@@ -663,8 +685,6 @@ function syncRecipeCardPlanButtons() {
     b.setAttribute("aria-pressed", inPlan ? "true" : "false");
   });
 }
-
-// ── Meal plan drawer ──────────────────────────────────────────────────────────
 
 function updatePlanBadge() {
   const count = planTitles.size;
@@ -763,7 +783,6 @@ function renderShoppingList() {
         }
       `;
 
-      // toggle strikethrough on check
       document.querySelectorAll(".shopping-item input").forEach((cb) => {
         cb.addEventListener("change", () => {
           cb.closest(".shopping-item").classList.toggle("checked", cb.checked);
@@ -785,8 +804,6 @@ function renderShoppingList() {
       });
     });
 }
-
-// ── Meal plan actions ─────────────────────────────────────────────────────────
 
 async function addToPlan(recipe) {
   const res = await fetch("/mealplan/add", {
@@ -839,8 +856,6 @@ async function clearPlan() {
   renderPlanView();
 }
 
-// ── Data fetching ─────────────────────────────────────────────────────────────
-
 async function fetchMeta() {
   try {
     const response = await fetch("/mealmap/meta");
@@ -868,6 +883,8 @@ async function fetchRagAnswer(query) {
   if (ragFlowAbortController) ragFlowAbortController.abort();
   ragFlowAbortController = new AbortController();
   const ragFlowSignal = ragFlowAbortController.signal;
+
+  let chatSearchPayload = null;
 
   try {
     beginBusy();
@@ -908,8 +925,13 @@ async function fetchRagAnswer(query) {
       signal: ragFlowSignal
     });
 
+    if (isSupersededRagRequest(requestToken)) {
+      searchResponse.body?.cancel?.();
+      return;
+    }
+
     const data = await searchResponse.json();
-    if (requestToken !== ragRequestToken) return;
+    if (isSupersededRagRequest(requestToken)) return;
 
     if (!searchResponse.ok) {
       lastSearchRefinement = null;
@@ -948,47 +970,14 @@ async function fetchRagAnswer(query) {
     hideMatchDropdown();
     setStatus(`Showing retrieved recipes for refined query: ${data.refined_query}`);
 
-    if (skipSummaryFetch) {
-      ragMeta.innerHTML = ragMetaMarkup(data);
-      llmAnswerPanel.hidden = false;
-    } else {
-      showSummaryPending(data);
-      const summaryResponse = await fetch("/mealmap/chat-summary", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          original_query: data.original_query || cleanQuery,
-          refined_query: data.refined_query || cleanQuery,
-          matches: data.matches || []
-        }),
-        signal: ragFlowSignal
-      });
-
-      const summaryData = await summaryResponse.json();
-      if (requestToken !== ragRequestToken) return;
-      if (!summaryResponse.ok) {
-        summaryRenderedForRefinement = null;
-        setStatus(summaryData.error || "Could not load summary.", true);
-        return;
-      }
-
-      const mergedAnswer = { ...data, answer: summaryData.answer || "" };
-      renderRagAnswer(mergedAnswer);
-      if (!llmAnswerPanel.hidden && String(mergedAnswer.answer || "").trim()) {
-        summaryRenderedForRefinement = {
-          original_message: cleanQuery,
-          refined_query: refinedForSummary,
-          retrieval_model: retrievalModelNow
-        };
-      } else {
-        summaryRenderedForRefinement = null;
-      }
-    }
+    chatSearchPayload = {
+      data,
+      refinedForSummary,
+      retrievalModelNow,
+      skipSummaryFetch
+    };
   } catch (error) {
-    if (requestToken !== ragRequestToken) return;
-    if (error && error.name === "AbortError") return;
+    if (shouldSilenceRagFlowError(error, requestToken, ragFlowSignal)) return;
     lastSearchRefinement = null;
     summaryRenderedForRefinement = null;
     console.error(error);
@@ -996,6 +985,62 @@ async function fetchRagAnswer(query) {
     updateResultsTitle();
   } finally {
     endBusy();
+  }
+
+  if (!chatSearchPayload || isSupersededRagRequest(requestToken)) return;
+
+  const { data, refinedForSummary, retrievalModelNow, skipSummaryFetch } = chatSearchPayload;
+
+  if (skipSummaryFetch) {
+    ragMeta.innerHTML = ragMetaMarkup(data);
+    llmAnswerPanel.hidden = false;
+    return;
+  }
+
+  try {
+    showSummaryPending(data);
+    const summaryResponse = await fetch("/mealmap/chat-summary", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        original_query: data.original_query || cleanQuery,
+        refined_query: data.refined_query || cleanQuery,
+        matches: data.matches || []
+      }),
+      signal: ragFlowSignal
+    });
+
+    if (isSupersededRagRequest(requestToken)) {
+      summaryResponse.body?.cancel?.();
+      return;
+    }
+
+    const summaryData = await summaryResponse.json();
+    if (isSupersededRagRequest(requestToken)) return;
+    if (!summaryResponse.ok) {
+      summaryRenderedForRefinement = null;
+      setStatus(summaryData.error || "Could not load summary.", true);
+      return;
+    }
+
+    const mergedAnswer = { ...data, answer: summaryData.answer || "" };
+    renderRagAnswer(mergedAnswer);
+    if (!llmAnswerPanel.hidden && String(mergedAnswer.answer || "").trim()) {
+      summaryRenderedForRefinement = {
+        original_message: cleanQuery,
+        refined_query: refinedForSummary,
+        retrieval_model: retrievalModelNow
+      };
+    } else {
+      summaryRenderedForRefinement = null;
+    }
+  } catch (error) {
+    if (shouldSilenceRagFlowError(error, requestToken, ragFlowSignal)) return;
+    summaryRenderedForRefinement = null;
+    console.error(error);
+    setStatus("Could not load summary.", true);
   }
 }
 
@@ -1064,8 +1109,6 @@ async function fetchRecommendations(selected) {
     endBusy();
   }
 }
-
-// ── Event listeners ───────────────────────────────────────────────────────────
 
 searchButton.addEventListener("click", () => {
   const query = searchInput.value.trim();
@@ -1300,8 +1343,6 @@ document.addEventListener("click", (event) => {
     hideMatchDropdown();
   }
 });
-
-// ── Init ──────────────────────────────────────────────────────────────────────
 
 fetch("/mealplan")
   .then((r) => r.json())
