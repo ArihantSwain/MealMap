@@ -275,7 +275,16 @@ function resetQueryBreakdownToEmpty() {
   if (queryBreakdownBadge) queryBreakdownBadge.textContent = "—";
 }
 
-async function updateQueryBreakdownPanel(queryText, signal) {
+function refreshBreakdownFromSearchInput() {
+  const q = (searchInput && searchInput.value) ? searchInput.value.trim() : "";
+  if (!q) {
+    resetQueryBreakdownToEmpty();
+    return;
+  }
+  void updateQueryBreakdownPanel(q);
+}
+
+async function updateQueryBreakdownPanel(queryText) {
   if (!queryBreakdownBody || !queryRadarMount || !queryBreakdownEmpty) return;
   const q = (queryText || "").trim();
   if (!q) {
@@ -283,9 +292,7 @@ async function updateQueryBreakdownPanel(queryText, signal) {
     return;
   }
   try {
-    const res = await fetch(`/mealmap/svd-explain?query=${encodeURIComponent(q)}`, {
-      signal: signal || undefined
-    });
+    const res = await fetch(`/mealmap/svd-explain?query=${encodeURIComponent(q)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "SVD explain failed");
     if (queryBreakdownBadge) {
@@ -937,7 +944,7 @@ async function fetchRagAnswer(query) {
       refined_query: data.refined_query || cleanQuery,
       model_used: data.model_used || currentModel
     };
-    void updateQueryBreakdownPanel(retrievalExplainQuery, ragFlowSignal);
+    refreshBreakdownFromSearchInput();
     hideMatchDropdown();
     setStatus(`Showing retrieved recipes for refined query: ${data.refined_query}`);
 
@@ -1047,7 +1054,7 @@ async function fetchRecommendations(selected) {
     hideMatchDropdown();
     retrievalExplainQuery = (lastUserQuery && lastUserQuery.trim()) || selected || "";
     renderRecipes(data.recipes || []);
-    void updateQueryBreakdownPanel(retrievalExplainQuery);
+    refreshBreakdownFromSearchInput();
   } catch (error) {
     if (requestToken !== recommendRequestToken) return;
     if (error && error.name === "AbortError") return;
@@ -1094,11 +1101,14 @@ searchInput.addEventListener("input", () => {
   }
 
   autocompleteTimer = setTimeout(() => {
+    const live = searchInput.value.trim();
+    if (!live) return;
     if (showListingDropdown && !showListingDropdown.checked) {
       hideMatchDropdown();
-      return;
+    } else {
+      fetchMatchSuggestions(live);
     }
-    fetchMatchSuggestions(query);
+    void updateQueryBreakdownPanel(live);
   }, 250);
 });
 
@@ -1130,7 +1140,10 @@ if (showListingDropdown) {
       return;
     }
     const query = searchInput.value.trim();
-    if (query) fetchMatchSuggestions(query);
+    if (query) {
+      fetchMatchSuggestions(query);
+      void updateQueryBreakdownPanel(query);
+    }
   });
 }
 
@@ -1149,6 +1162,9 @@ if (modelSelect) {
       fetchRagAnswer(lastUserQuery);
     } else if (query) {
       fetchMatchSuggestions(query);
+      void updateQueryBreakdownPanel(query);
+    } else {
+      refreshBreakdownFromSearchInput();
     }
   });
 }
@@ -1175,7 +1191,10 @@ filterButtons.forEach((button) => {
       fetchRagAnswer(lastUserQuery);
     } else {
       const query = searchInput.value.trim();
-      if (query) fetchMatchSuggestions(query);
+      if (query) {
+        fetchMatchSuggestions(query);
+        void updateQueryBreakdownPanel(query);
+      }
     }
   });
 });
@@ -1192,7 +1211,10 @@ clearFiltersButton.addEventListener("click", () => {
     fetchRagAnswer(lastUserQuery);
   } else {
     const query = searchInput.value.trim();
-    if (query) fetchMatchSuggestions(query);
+    if (query) {
+      fetchMatchSuggestions(query);
+      void updateQueryBreakdownPanel(query);
+    }
   }
 });
 
